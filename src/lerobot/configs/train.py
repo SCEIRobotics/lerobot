@@ -54,6 +54,8 @@ class TrainPipelineConfig(HubMixin):
     num_workers: int = 4
     batch_size: int = 8
     steps: int = 100_000
+    val_set_ratio: float = 0.1
+    val_eval_freq: int = -1
     eval_freq: int = 20_000
     log_freq: int = 200
     save_checkpoint: bool = True

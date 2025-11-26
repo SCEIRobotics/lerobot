@@ -20,6 +20,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import draccus
+from omegaconf import OmegaConf
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LambdaLR, LRScheduler
 
@@ -52,6 +53,23 @@ class DiffuserSchedulerConfig(LRSchedulerConfig):
 
         kwargs = {**asdict(self), "num_training_steps": num_training_steps, "optimizer": optimizer}
         return get_scheduler(**kwargs)
+
+
+from lerobot.optim.flower.tri_stage_scheduler import TriStageLRScheduler
+from dataclasses import dataclass, field
+from typing import Any, Optional, Dict
+@LRSchedulerConfig.register_subclass("TriStage")
+@dataclass
+class TriStageLRSchedulerConfig(LRSchedulerConfig):
+    configs: Dict[str, Any] = field(default_factory=dict)
+    num_warmup_steps: int | None = None
+    def build(self, optimizer, num_training_steps):
+        configs = OmegaConf.create(self.configs)
+        scheduler = TriStageLRScheduler(
+            optimizer,
+            configs
+        )
+        return scheduler
 
 
 @LRSchedulerConfig.register_subclass("vqbet")
