@@ -76,7 +76,7 @@ from lerobot.datasets.video_utils import (
 )
 from lerobot.utils.constants import HF_LEROBOT_HOME
 import torch.nn.functional as F
-
+import torchvision.transforms as T
 CODEBASE_VERSION = "v3.0"
 from lerobot.utils.constants import MAX_ACTION_DIM
 
@@ -702,7 +702,6 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self._lazy_loading = False
         self._recorded_frames = self.meta.total_frames
         self._writer_closed_for_reading = False
-
         # Load actual data
         try:
             if force_cache_sync:
@@ -730,7 +729,8 @@ class LeRobotDataset(torch.utils.data.Dataset):
         if self.delta_timestamps is not None:
             check_delta_timestamps(self.delta_timestamps, self.fps, self.tolerance_s)
             self.delta_indices = get_delta_indices(self.delta_timestamps, self.fps)
-
+        self.resize = T.Resize((112,112))
+        
     def _close_writer(self) -> None:
         """Close and cleanup the parquet writer if it exists."""
         writer = getattr(self, "writer", None)
@@ -1042,18 +1042,18 @@ class LeRobotDataset(torch.utils.data.Dataset):
             image_keys = self.meta.camera_keys
             for cam in image_keys:
                 item[cam] = self.image_transforms(item[cam])
-
+                item[cam] = self.resize(item[cam])
         # Add task as a string
         task_idx = item["task_index"].item()
         item["task"] = self.meta.tasks.iloc[task_idx].name
         item["info"] = {'robot_type': self.meta.info['robot_type']}
-        # valid_robots = ['franka','lift2', 'split_aloha', 'genie1']
-        # for robot in valid_robots:
-        #     if robot in str(self.repo_id):
-        #         item['info'] = {'robot_type':robot}
-        #         break
-        # else:
-        #     raise ValueError(f"Robot type not found in {str(self.root)}")
+        valid_robots = ['franka','lift2', 'split_aloha', 'genie1']
+        for robot in valid_robots:
+            if robot in str(self.repo_id):
+                item['info'] = {'robot_type':robot}
+                break
+        else:
+            raise ValueError(f"Robot type not found in {str(self.root)}")
         # 适配a1数据
         valid_action_key = [
             'actions.joint.position', 'actions.gripper.position',

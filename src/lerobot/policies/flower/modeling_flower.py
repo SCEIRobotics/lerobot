@@ -91,7 +91,6 @@ class FlowerPolicy(PreTrainedPolicy):
         self._queues = None
 
         self.flower = FlowerModel(config)
-
         self.reset()
 
     def get_optim_params(self) -> dict:
@@ -224,7 +223,7 @@ class FlowerPolicy(PreTrainedPolicy):
         # save_image(batch['observation.images'][0,0,0,:,:,:], 'train.png')
         loss = self.flower.compute_loss(batch)
         # no output_dict so returning None
-        print(f'loss: {loss}')
+        # print(f'loss: {loss}')
         return loss, None
 
 
@@ -342,7 +341,7 @@ class FlowerModel(nn.Module):
                 hidden_features=self.config.dit_dim, 
                 out_features=self.config.dit_dim, 
                 bias=True
-                )
+                ).to(self.device) 
             self.action_decoders[action_name] = nn.Linear(self.config.dit_dim, input_dim).to(self.device) 
                 
             if self.config.action_type_adaln:
@@ -350,7 +349,7 @@ class FlowerModel(nn.Module):
                     self.config.dit_dim, 
                     global_conddim=self.config.dit_dim, 
                     use_cross_attn=self.config.use_cross_attn
-                    )
+                    ).to(self.device) 
 
             if self.config.use_proprio:
                 # Add proprio encoder if needed for bimanual nav variant otherwise use zero encoder
@@ -811,11 +810,6 @@ class FlowerModel(nn.Module):
         for idx, instruction in enumerate(language_instruction):
             if self.config.vlm_prompt_style == "default":
                 # Original instruction only
-                import pdb; pdb.set_trace()
-                # 一行代码搞定
-                action_mask = dataset_batch['action_mask'][idx]
-                action_sapce_name = [k for k, v in self.action_space_index.action_dims.items() if v == action_mask.sum()][0]
-                [k for k, v in self.action_space_index.action_dims.items() if v == dataset_batch['action_mask'][idx].sum()][0]
                 robot_type = dataset_batch['info']["robot_type"][idx]
                 action_index = self.action_space_index.robot_mapping[robot_type]
                 batch_action_index.append(action_index)
@@ -877,12 +871,12 @@ class FlowerModel(nn.Module):
         #     if mask.any():
         #         encoded_proprio = self.proprio_encoders[action_name](proprio) # .squeeze(1)
         
-        encoded_proprio = torch.zeros(batch_size, self.config.dit_dim, device=self.device, dtype=default_dtype)
+        encoded_proprio = torch.zeros(batch_size, self.config.dit_dim, device=self.device, dtype=torch.bfloat16)
         for action_name, action_idx in self.action_space_index.action_spaces.items():
             mask = (action_type == action_idx)
             if mask.any():
                 adim = self.action_space_index.get_action_dim(action_idx)
-                encoded_proprio[mask] = self.proprio_encoders[action_name](proprio[mask, :adim]).squeeze(1).to(default_dtype)
+                encoded_proprio[mask] = self.proprio_encoders[action_name](proprio[mask, :adim]).squeeze(1)
         return encoded_proprio
     
     def encode_actions(self, z: torch.Tensor, action_type: torch.Tensor) -> torch.Tensor:
@@ -895,8 +889,8 @@ class FlowerModel(nn.Module):
         #     mask = (action_type == action_idx)
         #     if mask.any():
         #         encoded = self.action_encoders[action_name](z)
-
-        encoded = torch.zeros(batch_size, z.shape[1], self.config.dit_dim, device=device, dtype=default_dtype)
+        
+        encoded = torch.zeros(batch_size, z.shape[1], self.config.dit_dim, device=device, dtype=torch.bfloat16)
         valid_dims = torch.zeros_like(z, dtype=default_dtype)
         for action_name, action_idx in self.action_space_index.action_spaces.items():
             mask = (action_type == action_idx)
@@ -919,13 +913,13 @@ class FlowerModel(nn.Module):
 
         batch_size = z.shape[0]
         max_action_dim = self.action_space_index.get_max_action_dim()
-        decoded = torch.zeros(batch_size, z.shape[1], max_action_dim, device=device, dtype=default_dtype)
+        decoded = torch.zeros(batch_size, z.shape[1], max_action_dim, device=device, dtype=torch.bfloat16)
         for action_name, action_idx in self.action_space_index.action_spaces.items():
             mask = (action_type == action_idx)
             if mask.any():
                 adim = self.action_space_index.get_action_dim(action_idx)
                 pred = self.action_decoders[action_name](z[mask])
-                decoded[mask, :, :adim] = pred[..., :adim] * valid_dims[mask, :, :adim]
+                decoded[mask, :, :adim] = (pred[..., :adim] * valid_dims[mask, :, :adim]).to(torch.bfloat16)
 
         return decoded
 
@@ -939,7 +933,7 @@ class FlowerModel(nn.Module):
         num_chunks = 9 if self.config.use_cross_attn else 6
         
         mod_signals = [
-            torch.zeros(batch_size, self.config.dit_dim, device=device, dtype=default_type) 
+            torch.zeros(batch_size, self.config.dit_dim, device=device, dtype=torch.bfloat16) 
             for _ in range(num_chunks)
         ]
         

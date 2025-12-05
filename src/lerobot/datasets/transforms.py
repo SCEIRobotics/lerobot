@@ -181,16 +181,6 @@ class ImageTransformsConfig:
     random_order: bool = False
     tfs: dict[str, ImageTransformConfig] = field(
         default_factory=lambda: {
-            # # 新增 Resize 
-            # "resize": ImageTransformConfig(
-            #     weight=1.0,  
-            #     type="Resize",
-            #     kwargs={
-            #         "size": (112,112), 
-            #         "interpolation": v2.InterpolationMode.BILINEAR, 
-            #         "antialias": True 
-            #     },
-            # ),
             "brightness": ImageTransformConfig(
                 weight=1.0,
                 type="ColorJitter",
@@ -234,8 +224,6 @@ def make_transform_from_config(cfg: ImageTransformConfig):
         return SharpnessJitter(**cfg.kwargs)
     elif cfg.type == "RandomAffine":
         return v2.RandomAffine(**cfg.kwargs)
-    # elif cfg.type == "Resize":
-    #     return v2.Resize(**cfg.kwargs)
     else:
         raise ValueError(f"Transform '{cfg.type}' is not valid.")
 
@@ -249,15 +237,9 @@ class ImageTransforms(Transform):
 
         self.weights = []
         self.transforms = {}
-        # self._transforms=[]
         for tf_name, tf_cfg in cfg.tfs.items():
             if tf_cfg.weight <= 0.0:
                 continue
-            # if tf_name == "resize":
-            #     self._transforms.append(make_transform_from_config(tf_cfg))
-            # else:
-            #     self.transforms[tf_name] = make_transform_from_config(tf_cfg)
-            #     self.weights.append(tf_cfg.weight)
             self.transforms[tf_name] = make_transform_from_config(tf_cfg)
             self.weights.append(tf_cfg.weight)
 
@@ -271,9 +253,5 @@ class ImageTransforms(Transform):
                 n_subset=n_subset,
                 random_order=cfg.random_order,
             )
-        # self.tf = v2.Compose([
-        #     *self._transforms,  # 强制Resize
-        #     self.tf  # 随机应用其他变换（如亮度、 affine等）
-        # ])
     def forward(self, *inputs: Any) -> Any:
         return self.tf(*inputs)
