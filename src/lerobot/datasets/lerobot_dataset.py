@@ -75,9 +75,10 @@ from lerobot.datasets.video_utils import (
     get_video_info,
 )
 from lerobot.utils.constants import HF_LEROBOT_HOME
+import torch.nn.functional as F
 
 CODEBASE_VERSION = "v3.0"
-
+from lerobot.utils.constants import MAX_ACTION_DIM
 
 class LeRobotDatasetMetadata:
     def __init__(
@@ -90,7 +91,7 @@ class LeRobotDatasetMetadata:
     ):
         self.repo_id = repo_id
         self.revision = revision if revision else CODEBASE_VERSION
-        self.root = Path(root) if root is not None else HF_LEROBOT_HOME / repo_id
+        self.root = Path(f'{root}/{repo_id}') if root is not None else HF_LEROBOT_HOME / repo_id
         self.writer = None
         self.latest_episode = None
         self.metadata_buffer: list[dict] = []
@@ -100,6 +101,7 @@ class LeRobotDatasetMetadata:
             if force_cache_sync:
                 raise FileNotFoundError
             self.load_metadata()
+            print(f"Loaded metadata for {self.repo_id}@{self.revision}")
         except (FileNotFoundError, NotADirectoryError):
             if is_valid_version(self.revision):
                 self.revision = get_safe_version(self.repo_id, self.revision)
@@ -508,7 +510,7 @@ class LeRobotDatasetMetadata:
         """Creates metadata for a LeRobotDataset."""
         obj = cls.__new__(cls)
         obj.repo_id = repo_id
-        obj.root = Path(root) if root is not None else HF_LEROBOT_HOME / repo_id
+        obj.root = Path(f'{root}/{repo_id}') if root is not None else HF_LEROBOT_HOME / repo_id
 
         obj.root.mkdir(parents=True, exist_ok=False)
 
@@ -542,6 +544,7 @@ class LeRobotDatasetMetadata:
 class LeRobotDataset(torch.utils.data.Dataset):
     def __init__(
         self,
+        cfg,
         repo_id: str,
         root: str | Path | None = None,
         episodes: list[int] | None = None,
@@ -668,9 +671,10 @@ class LeRobotDataset(torch.utils.data.Dataset):
         """
         super().__init__()
         self.repo_id = repo_id
-        self.root = Path(root) if root else HF_LEROBOT_HOME / repo_id
+        self.root = Path(root)
+        # Path(f'{root}/{repo_id}') if root else HF_LEROBOT_HOME / repo_id
         self.image_transforms = image_transforms
-        self.delta_timestamps = delta_timestamps
+        # self.delta_timestamps = delta_timestamps
         self.episodes = episodes
         self.tolerance_s = tolerance_s
         self.revision = revision if revision else CODEBASE_VERSION
@@ -692,7 +696,8 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self.meta = LeRobotDatasetMetadata(
             self.repo_id, self.root, self.revision, force_cache_sync=force_cache_sync
         )
-
+        from lerobot.datasets.factory import resolve_delta_timestamps
+        self.delta_timestamps = resolve_delta_timestamps(cfg, self.meta)
         # Track dataset state for efficient incremental writing
         self._lazy_loading = False
         self._recorded_frames = self.meta.total_frames
@@ -704,8 +709,8 @@ class LeRobotDataset(torch.utils.data.Dataset):
                 raise FileNotFoundError
             self.hf_dataset = self.load_hf_dataset()
             # Check if cached dataset contains all requested episodes
-            if not self._check_cached_episodes_sufficient():
-                raise FileNotFoundError("Cached dataset doesn't contain all requested episodes")
+            # if not self._check_cached_episodes_sufficient():
+            #     raise FileNotFoundError("Cached dataset doesn't contain all requested episodes")
         except (AssertionError, FileNotFoundError, NotADirectoryError):
             if is_valid_version(self.revision):
                 self.revision = get_safe_version(self.repo_id, self.revision)
@@ -839,7 +844,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
     def load_hf_dataset(self) -> datasets.Dataset:
         """hf_dataset contains all the observations, states, actions, rewards, etc."""
         features = get_hf_features_from_features(self.features)
-        hf_dataset = load_nested_dataset(self.root / "data", features=features, episodes=self.episodes)
+        hf_dataset = load_nested_dataset(Path(f'{self.root}/{self.repo_id}/data'), features=features, episodes=self.episodes)
         hf_dataset.set_transform(hf_transform_to_torch)
         return hf_dataset
 
@@ -993,7 +998,8 @@ class LeRobotDataset(torch.utils.data.Dataset):
             from_timestamp = ep[f"videos/{vid_key}/from_timestamp"]
             shifted_query_ts = [from_timestamp + ts for ts in query_ts]
 
-            video_path = self.root / self.meta.get_video_file_path(ep_idx, vid_key)
+            video_path = f'{self.root}/{self.repo_id}/{self.meta.get_video_file_path(ep_idx, vid_key)}'
+            # self.root / self.meta.get_video_file_path(ep_idx, vid_key)
             frames = decode_video_frames(video_path, shifted_query_ts, self.tolerance_s, self.video_backend)
             item[vid_key] = frames.squeeze(0)
 
@@ -1040,8 +1046,61 @@ class LeRobotDataset(torch.utils.data.Dataset):
         # Add task as a string
         task_idx = item["task_index"].item()
         item["task"] = self.meta.tasks.iloc[task_idx].name
-        return item
+        item["info"] = {'robot_type': self.meta.info['robot_type']}
+        # valid_robots = ['franka','lift2', 'split_aloha', 'genie1']
+        # for robot in valid_robots:
+        #     if robot in str(self.repo_id):
+        #         item['info'] = {'robot_type':robot}
+        #         break
+        # else:
+        #     raise ValueError(f"Robot type not found in {str(self.root)}")
+        # 适配a1数据
+        valid_action_key = [
+            'actions.joint.position', 'actions.gripper.position',
+            'actions.left_joint.position', 'actions.left_gripper.position',
+            'actions.right_joint.position', 'actions.right_gripper.position'
+            ]
+        valid_state_key = [
+            'states.joint.position', 'states.gripper.position',
+            'states.left_joint.position', 'states.left_gripper.position',
+            'states.right_joint.position', 'states.right_gripper.position'
+            ]
+        if 'action' not in item:
+            action_tensors = []
+            action_is_pad = None
+            for key in valid_action_key:
+                if key in item:
+                    action_tensor = item[key]
+                    if 'gripper' in key:
+                        action_tensor = action_tensor.unsqueeze(-1)
+                    action_tensors.append(action_tensor)
+                    action_is_pad = item[f'{key}_is_pad']  # 取任意一个valid_action_key的is_pad
+            item['action'] = torch.cat(action_tensors, dim=-1)
+            item['action_is_pad'] = action_is_pad
+        if 'observation.state' not in item:
+            state_tensors = []
+            state_is_pad = None   
+            for key in valid_state_key:
+                if key in item:
+                    state_tensor = item[key]
+                    if 'gripper' in key:
+                        state_tensor = state_tensor.unsqueeze(-1)
+                    state_tensors.append(state_tensor)
+                    state_is_pad = item[f'{key}_is_pad']  # 取任意一个valid_state_key的is_pad
+            item['observation.state'] = torch.cat(state_tensors, dim=-1)
+            item['observation.state_is_pad'] = state_is_pad
 
+        pad = [0, MAX_ACTION_DIM - item['action'].shape[-1]]
+        item['action_mask'] = (torch.arange(MAX_ACTION_DIM) < item['action'].shape[-1]).bool()
+        item['action'] = F.pad(item['action'], pad, mode='constant', value=0.0)
+        item['observation.state_mask'] = (torch.arange(MAX_ACTION_DIM) < item['observation.state'].shape[-1]).bool()
+        item['observation.state'] = F.pad(item['observation.state'], pad, mode='constant', value=0.0)
+        for key in list(item.keys()):
+            if key.startswith("images"):
+                new_key = key.replace("images", "observation.image")
+                item[new_key] = item[key]
+        return item
+    
     def __repr__(self):
         feature_keys = list(self.features)
         return (
@@ -1536,6 +1595,7 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
 
     def __init__(
         self,
+        cfg,
         repo_ids: list[str],
         root: str | Path | None = None,
         episodes: dict | None = None,
@@ -1551,10 +1611,14 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         self.tolerances_s = tolerances_s if tolerances_s else dict.fromkeys(repo_ids, 0.0001)
         # Construct the underlying datasets passing everything but `transform` and `delta_timestamps` which
         # are handled by this class.
-        self._datasets = [
-            LeRobotDataset(
+        self._datasets = []
+        self.samples = []
+        self.sub_samples = {}
+        for sub_id, repo_id in enumerate(repo_ids):
+            sub_dataset = LeRobotDataset(
+                cfg,
                 repo_id,
-                root=self.root / repo_id,
+                root=self.root,
                 episodes=episodes[repo_id] if episodes else None,
                 image_transforms=image_transforms,
                 delta_timestamps=delta_timestamps,
@@ -1562,35 +1626,13 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
                 download_videos=download_videos,
                 video_backend=video_backend,
             )
-            for repo_id in repo_ids
-        ]
-
-        # Disable any data keys that are not common across all of the datasets. Note: we may relax this
-        # restriction in future iterations of this class. For now, this is necessary at least for being able
-        # to use PyTorch's default DataLoader collate function.
-        self.disabled_features = set()
-        intersection_features = set(self._datasets[0].features)
-        for ds in self._datasets:
-            intersection_features.intersection_update(ds.features)
-        if len(intersection_features) == 0:
-            raise RuntimeError(
-                "Multiple datasets were provided but they had no keys common to all of them. "
-                "The multi-dataset functionality currently only keeps common keys."
-            )
-        for repo_id, ds in zip(self.repo_ids, self._datasets, strict=True):
-            extra_keys = set(ds.features).difference(intersection_features)
-            logging.warning(
-                f"keys {extra_keys} of {repo_id} were disabled as they are not contained in all the "
-                "other datasets."
-            )
-            self.disabled_features.update(extra_keys)
-
-        self.image_transforms = image_transforms
-        self.delta_timestamps = delta_timestamps
-        # TODO(rcadene, aliberts): We should not perform this aggregation for datasets
-        # with multiple robots of different ranges. Instead we should have one normalization
-        # per robot.
-        self.stats = aggregate_stats([dataset.meta.stats for dataset in self._datasets])
+            self._datasets.append(sub_dataset)
+            start_idx = len(self.samples)
+            for idx in range(len(sub_dataset)):
+                self.samples.append(sub_id)
+            end_idx = len(self.samples)
+            self.sub_samples[sub_id] = list(range(start_idx, end_idx))
+        assert len(self.samples) == self.num_frames
 
     @property
     def repo_id_to_index(self):
@@ -1686,10 +1728,7 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
             raise AssertionError("We expect the loop to break out as long as the index is within bounds.")
         item = self._datasets[dataset_idx][idx - start_idx]
         item["dataset_index"] = torch.tensor(dataset_idx)
-        for data_key in self.disabled_features:
-            if data_key in item:
-                del item[data_key]
-
+        item['sub_idx'] = self.samples[idx]
         return item
 
     def __repr__(self):
@@ -1705,3 +1744,39 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
             f"  Transformations: {self.image_transforms},\n"
             f")"
         )
+
+
+import random
+class SameSubsetSampler(torch.utils.data.Sampler):
+    def __init__(self, dataset, batch_size=32):
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.sub_ids = list(dataset.sub_samples.keys())
+        self.total_batches = 0
+        
+        self.sub_batch_counts = {}
+        for sub_id in self.sub_ids:
+            sample_num = len(dataset.sub_samples[sub_id])
+            self.sub_batch_counts[sub_id] = sample_num // batch_size
+            self.total_batches += self.sub_batch_counts[sub_id]
+    
+    def __iter__(self):
+        all_batches = []
+        for sub_id in self.sub_ids:
+            sub_sample_indices = self.dataset.sub_samples[sub_id].copy()
+            random.shuffle(sub_sample_indices)
+            
+            for i in range(self.sub_batch_counts[sub_id]):
+                start = i * self.batch_size
+                end = start + self.batch_size
+                batch = sub_sample_indices[start:end]
+                all_batches.append(batch)
+        
+        random.shuffle(all_batches)
+        flat_indices = []
+        for batch in all_batches:
+            flat_indices.extend(batch)
+        return iter(flat_indices)
+    
+    def __len__(self):
+        return self.total_batches * self.batch_size

@@ -78,11 +78,28 @@ class ActionIndex:
     def __init__(self):
         # Define action spaces with their dimensions
         self.action_spaces = {
-            'pusht': 0,
+            'pos-1_arm-8_dim': 0, 
+            'pos-2_arm-14_dim': 1,
+            'pos-2_arm-16_dim': 2,
         }
         
         self.action_dims = {
-            'pusht': 2,
+            'pos-1_arm-8_dim': 8, 
+            'pos-2_arm-14_dim': 14,
+            'pos-2_arm-16_dim': 16,
+        }
+
+        self.robot_arm = {
+            'pos-1_arm-8_dim': 1, 
+            'pos-2_arm-14_dim': 2,
+            'pos-2_arm-16_dim': 2,
+        }
+
+        self.robot_mapping = {
+            'franka': 0,
+            'lift2': 1,
+            'split_aloha': 1,
+            'genie1': 2,
         }
 
         # Create mapping from (robot_type, control_mode, num_arms) to action type
@@ -118,6 +135,11 @@ class ActionIndex:
         """Get action dimension for a given action type index."""
         dims = list(self.action_dims.values())
         return dims[index]
+    
+    def get_num_arms(self, index: int) -> int:
+        """Get number of arms for a given action type index."""
+        num_arms = list(self.robot_arm.values())
+        return num_arms[index]
 
     def get_dataset_action_index(self, dataset_name: str) -> int:
         """Get action type index for a dataset."""

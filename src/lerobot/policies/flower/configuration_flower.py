@@ -27,7 +27,7 @@ from lerobot.optim.schedulers import TriStageLRSchedulerConfig
 @dataclass
 class FlowerConfig(PreTrainedConfig):
     # Inputs / output structure.
-    n_obs_steps: int = 2  # num_latest_obs
+    n_obs_steps: int = 2  # num_latest_obs flower只支持1
     horizon: int = 16  # pred action
     n_action_steps: int = 8  # exec action  deployed_action_steps
 
@@ -47,7 +47,7 @@ class FlowerConfig(PreTrainedConfig):
     num_inference_steps: int | None = 4  # num_sampling_steps=4 # flower使用rectified flow，只需要4步
 
     # Loss computation
-    do_mask_loss_for_padding: bool = False
+    do_mask_loss_for_padding: bool = True
 
     # Training presets
     # # Optimizer Configuration
@@ -102,11 +102,6 @@ class FlowerConfig(PreTrainedConfig):
     query_seq_len=100
     rope_theta=32.0
 
-    # robot
-    robot_name='lerobot'
-    action_space = 'pusht'
-    num_arms=1
-
     def __post_init__(self):
         super().__post_init__()
 
@@ -146,17 +141,19 @@ class FlowerConfig(PreTrainedConfig):
         return TriStageLRSchedulerConfig(configs=configs)
 
     def validate_features(self) -> None:
-        if len(self.image_features) == 0 and self.env_state_feature is None:
-            raise ValueError("You must provide at least one image or the environment state among the inputs.")
+        pass
+        # if len(self.image_features) == 0 and self.env_state_feature is None:
+        #     raise ValueError("You must provide at least one image or the environment state among the inputs.")
 
         # Check that all input images have the same shape.
-        if len(self.image_features) > 0:
-            first_image_key, first_image_ft = next(iter(self.image_features.items()))
-            for key, image_ft in self.image_features.items():
-                if image_ft.shape != first_image_ft.shape:
-                    raise ValueError(
-                        f"`{key}` does not match `{first_image_key}`, but we expect all image shapes to match."
-                    )
+        # a1数据`images.rgb.hand`和`images.rgb.head`的大小并不match，现在是在image_transforms里做resize，这里暂时不进行check
+        # if len(self.image_features) > 0:
+        #     first_image_key, first_image_ft = next(iter(self.image_features.items()))
+        #     for key, image_ft in self.image_features.items():
+        #         if image_ft.shape != first_image_ft.shape:
+        #             raise ValueError(
+        #                 f"`{key}` does not match `{first_image_key}`, but we expect all image shapes to match."
+        #             )
 
     @property
     def observation_delta_indices(self) -> list:

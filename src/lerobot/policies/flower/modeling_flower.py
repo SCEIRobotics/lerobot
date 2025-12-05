@@ -60,6 +60,7 @@ from lerobot.policies.flower.transformers_flower import (
     FlowBlock, 
     stateless_norm
 )
+from torchvision.utils import save_image
 
 
 class FlowerPolicy(PreTrainedPolicy):
@@ -73,7 +74,7 @@ class FlowerPolicy(PreTrainedPolicy):
 
     def __init__(
         self,
-        config: DiffusionConfig,
+        config: FlowerConfig,
     ):
         """
         Args:
@@ -126,16 +127,53 @@ class FlowerPolicy(PreTrainedPolicy):
             self._queues[OBS_ENV_STATE] = deque(maxlen=self.config.n_obs_steps)
 
     @torch.no_grad()
-    def predict_action_chunk(self, batch: dict[str, Tensor], noise: Tensor | None = None) -> Tensor:
+    def validate_action_chunk_(self, batch: dict[str, Tensor], noise: Tensor | None = None) -> Tensor:
         """Predict a chunk of actions given environment observations."""
         # 改为不使用队列，直接使用batch
         if self.config.image_features:
             batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
             batch[OBS_IMAGES] = torch.stack([batch[key] for key in self.config.image_features], dim=-4)
+        # import pdb; pdb.set_trace()
         actions = self.flower.generate_actions(batch, noise=noise)
 
         return actions
+    
+    @torch.no_grad()
+    def predict_action_chunk(self, batch: dict[str, Tensor], noise: Tensor | None = None) -> Tensor:
+        """Predict a chunk of actions given environment observations."""
+        # stack n latest observations from the queue
+        # import pdb; pdb.set_trace()
+        # batch = {k: torch.stack(list(self._queues[k]), dim=1) for k in batch if k in self._queues}
+        for k in batch:
+            if k in self._queues:
+                if k=='task':
+                    # batch[k]=['Push the T-shaped block onto the T-shaped target.' for i in range(500)]
+                    batch[k]=['Pick up the cube with the right arm and transfer it to the left arm.' for i in range(16)]
+                else:
+                    batch[k] = torch.stack(list(self._queues[k]), dim=1)
+        # batch['observation.images']=batch['observation.images.top']
+        batch_size, n_obs_steps, cam, channels, height, width = batch['observation.images'].shape
+        x_reshaped = batch['observation.images'].view(
+                    batch_size*n_obs_steps*cam,
+                    channels,
+                    height,
+                    width,
+                )
+        x_reshaped = F.interpolate(x_reshaped, size=(224,224), mode='bilinear')
+        batch['observation.images'] = x_reshaped.view(
+                    batch_size,
+                    n_obs_steps,
+                    cam,
+                    channels,
+                    224,
+                    224,
+                )
+        # save_image(batch['observation.images'][0,0,0,:,:,:], 'test.png')
 
+        actions = self.flower.generate_actions(batch, noise=noise)
+
+        return actions
+    
     @torch.no_grad()
     def select_action(self, batch: dict[str, Tensor], noise: Tensor | None = None) -> Tensor:
         """Select a single action given environment observations.
@@ -177,11 +215,16 @@ class FlowerPolicy(PreTrainedPolicy):
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, None]:
         """Run the batch through the model and compute the loss for training or validation."""
-        if self.config.image_features:
-            batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
-            batch[OBS_IMAGES] = torch.stack([batch[key] for key in self.config.image_features], dim=-4)
+        batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
+        image_features = []
+        for key in list(batch.keys()):
+            if key.startswith('observation.image') and '_is_pad' not in key:
+                image_features.append(key)
+        batch[OBS_IMAGES] = torch.stack([batch[key] for key in image_features], dim=-4)
+        # save_image(batch['observation.images'][0,0,0,:,:,:], 'train.png')
         loss = self.flower.compute_loss(batch)
         # no output_dict so returning None
+        print(f'loss: {loss}')
         return loss, None
 
 
@@ -195,12 +238,12 @@ class FlowerModel(nn.Module):
         
         # Initialize configurations: 已移到configuration_flower
         # Set task prompt format
-        self.format_instruction = functools.partial(
-            generate_policy_prompt,
-            robot_name=config.robot_name,
-            action_space=config.action_space,
-            num_arms=config.num_arms,
-            prompt_style='minimal')
+        # self.format_instruction = functools.partial(
+        #     generate_policy_prompt,
+        #     robot_name=config.robot_name,
+        #     action_space=config.action_space,
+        #     num_arms=config.num_arms,
+        #     prompt_style='minimal')
         
         # Setup VLM and core components
         self._setup_vlm(
@@ -554,15 +597,39 @@ class FlowerModel(nn.Module):
 
         # Interpolate between actions and noise
         texp = t.view([b] + [1] * (trajectory.dim() - 1))
-        z1 = torch.randn_like(trajectory, device=device).to(default_dtype)
+        # z1 = torch.randn_like(trajectory, device=device).to(default_dtype)
+        z1 = torch.zeros_like(trajectory)
+        action_type = cond['action_type']
+        for action_name, action_idx in self.action_space_index.action_spaces.items():
+            mask = (action_type == action_idx)
+            if mask.any():
+                adim = self.action_space_index.get_action_dim(action_idx)
+                noise_slice = torch.randn(
+                    (mask.sum(), trajectory.size(1), adim), 
+                    dtype=default_dtype, 
+                    device=device
+                    )
+                z1[mask, :, :adim] = noise_slice
         zt = (1 - texp) * trajectory + texp * z1
 
         # Forward pass
         vtheta = self.dit_forward(zt, t, cond)
-
+        
+        # valid_mask
+        valid_mask = torch.zeros_like(trajectory, dtype=torch.bool)
+        for action_name, action_idx in self.action_space_index.action_spaces.items():
+            mask = (action_type == action_idx)
+            if mask.any():
+                adim = self.action_space_index.get_action_dim(action_idx)
+                mask_expanded = mask.view(-1, 1, 1).expand(-1, trajectory.size(1), adim).to(device)
+                valid_mask[mask, :, :adim] = mask_expanded[mask]
         # Compute loss on valid dimensions only
         diff = (z1 - trajectory) - vtheta
-        valid_diff = diff
+        valid_diff = torch.where(
+            valid_mask, 
+            diff, 
+            torch.tensor(0.0, device=diff.device)
+            ) # valid_diff = diff[valid_mask]  # valid_diff = diff
         # loss = (valid_diff ** 2)  # l2
         loss = torch.abs(valid_diff)  # l1
         # Mask loss wherever the action is padded with copies (edges of the dataset trajectory).
@@ -574,7 +641,6 @@ class FlowerModel(nn.Module):
                 )
             in_episode_bound = ~batch["action_is_pad"]
             loss = loss * in_episode_bound.unsqueeze(-1)
-
         return loss.mean()
 
     def encode_observations(self, batch):
@@ -585,8 +651,8 @@ class FlowerModel(nn.Module):
         
         batch_size, n_obs_steps = batch[OBS_STATE].shape[:2]
         # horizon, action_dim = batch[ACTION].shape[1:]  # TODO: 后续推理需要额外输入batch[ACTION]，是否需要修改这里的逻辑
-        horizon = self.config.horizon
-        action_dim = self.action_space_index.action_dims[self.config.action_space]
+        # horizon = self.config.horizon
+        # action_dim = batch[ACTION].shape[-1] # self.action_space_index.action_dims[self.config.action_space]
         # Extract visual features
         # 根据flower的实现用同一个vlm的encoder分别编码
         images_per_camera = einops.rearrange(batch[OBS_IMAGES], "b s n ... -> n (b s) ...")
@@ -599,20 +665,24 @@ class FlowerModel(nn.Module):
         
         # Get text embeddings
         # Get text embeddings once to reuse
-        constructed_prompts = self.construct_prompts(batch)
-        text_embeds = self._get_text_embeddings(constructed_prompts, device)
+        constructed_prompts, batch_action_index = self.construct_prompts(batch)
+        text_embeds, txt_attention_mask = self._get_text_embeddings(constructed_prompts, device)
         # Add task prompt and aggregation tokens
         task_prompt = self.prompt_embeds.expand(batch_size, -1, -1)
         
         # Merge sequence
         merged_embeds = torch.cat([
-            img_features,
             task_prompt.to(img_features.device),
+            img_features,
             text_embeds.to(img_features.device)
         ], dim=1)
-        
+
         # Create attention mask
-        attention_mask = torch.ones(merged_embeds.shape[:2], device=merged_embeds.device)
+        # attention_mask = torch.ones(merged_embeds.shape[:2], device=merged_embeds.device)
+        prompt_mask = torch.zeros(batch_size, 1, dtype=torch.bool, device=device)
+        txt_attention_mask = txt_attention_mask.to(device).squeeze(1)  # get attention mask from txt
+        vis_attention_mask = torch.ones(img_features.shape[:2], device=device)  # define attention mask for image
+        attention_mask = torch.cat([prompt_mask, vis_attention_mask, txt_attention_mask], dim=1)
         # Process through encoder
         features = self.vlm.get_encoder()(
             inputs_embeds=merged_embeds,
@@ -625,21 +695,22 @@ class FlowerModel(nn.Module):
         # Prepare frequency and action space embeddings
         frequency_embeds = self.frequency_embedder(
             torch.ones(batch_size, 1, 1).to(device) * self.config.data_frequency
-        )
+        )  # 暂时固定
         
         # Get proprioception if enabled
         proprio = None
         if self.config.use_proprio:
             proprio = batch['observation.state'].to(device).to(default_dtype)
 
-        action_type_tensor = torch.ones(batch_size, horizon, action_dim) * \
-            self.action_space_index.action_spaces[self.config.action_space]
-        
+        # action_type_tensor = torch.ones(batch_size, horizon, action_dim) * \
+        #     self.action_space_index.action_spaces[self.config.action_space]
+        # batch[self.goal_modalities]['action_space_index'],
+        # action_type_tensor = batch_action_index.view(-1, 1, 1).expand(-1, horizon, action_dim)
         return {
             'features': features,
             'frequency_embeds': frequency_embeds,
-            'action_space_embeds': None,
-            'action_type': action_type_tensor,
+            'action_space_embeds': self.action_space_embedder(batch_action_index.to(device)),
+            'action_type': batch_action_index.to(device),
             'proprio': proprio,
             'attention_mask': attention_mask,
         }
@@ -660,12 +731,12 @@ class FlowerModel(nn.Module):
         if self.config.use_proprio and cond_dict['proprio'] is not None:
             # 这里处理为每个时间步的proprioception取平均值, flower本身不支持n_obs
             proprio = cond_dict['proprio'].to(default_dtype)
-            proprio_embeds = self.encode_proprio(proprio, action_type, frequency_embeds.shape).mean(dim=1, keepdim=True)
+            proprio_embeds = self.encode_proprio(proprio, action_type, frequency_embeds.shape)
         else:
             proprio_embeds = torch.zeros_like(frequency_embeds)
-        
+
         # Encode actions
-        z = self.encode_actions(z, action_type)
+        z, valid_dims = self.encode_actions(z, action_type)
         
         # Add positional encoding if not using ROPE/NOPE
         if not self.config.use_rope and not self.config.use_nope:
@@ -706,7 +777,7 @@ class FlowerModel(nn.Module):
             )
             
         # Decode and return
-        return self.decode_actions(cx, action_type)
+        return self.decode_actions(cx, action_type, valid_dims)
 
     def _create_prompt_embed(self, prompt_text):
         """Create embeddings for prompt tokens"""
@@ -736,11 +807,28 @@ class FlowerModel(nn.Module):
     
         language_instruction = dataset_batch["task"]
         text_prompts = []
-        
-        for instruction in language_instruction:
+        batch_action_index = []
+        for idx, instruction in enumerate(language_instruction):
             if self.config.vlm_prompt_style == "default":
                 # Original instruction only
-                text_prompts.append(self.format_instruction(instruction))
+                import pdb; pdb.set_trace()
+                # 一行代码搞定
+                action_mask = dataset_batch['action_mask'][idx]
+                action_sapce_name = [k for k, v in self.action_space_index.action_dims.items() if v == action_mask.sum()][0]
+                [k for k, v in self.action_space_index.action_dims.items() if v == dataset_batch['action_mask'][idx].sum()][0]
+                robot_type = dataset_batch['info']["robot_type"][idx]
+                action_index = self.action_space_index.robot_mapping[robot_type]
+                batch_action_index.append(action_index)
+                instruction = generate_policy_prompt(
+                    instruction,
+                    robot_name=robot_type,
+                    num_arms=self.action_space_index.get_num_arms(action_index),
+                    action_space=f"{self.action_space_index.get_action_dim(action_index)}D continuous",
+                    prompt_style="minimal",
+                    include_meta=True
+                    )
+                text_prompts.append(instruction)
+                # text_prompts.append(self.format_instruction(instruction))
                 
             elif self.config.vlm_prompt_style == "feature_focused":
                 # Focus on extracting visual features relevant for manipulation
@@ -755,8 +843,8 @@ class FlowerModel(nn.Module):
             else:
                 raise ValueError(f"Unknown prompt style: {self.config.vlm_prompt_style}")
         
-        
-        return text_prompts
+        batch_action_index = torch.tensor(batch_action_index)
+        return text_prompts, batch_action_index
 
     def _get_text_embeddings(self, text, device):
         """Get text embeddings to use with VLM"""
@@ -767,7 +855,9 @@ class FlowerModel(nn.Module):
             truncation=True,
             max_length=77
         ).to(device)
-        return self.vlm.get_input_embeddings()(text_inputs["input_ids"])
+        text_embeds = self.vlm.get_input_embeddings()(text_inputs["input_ids"])
+        txt_attention_mask = text_inputs.data["attention_mask"]
+        return text_embeds, txt_attention_mask 
     
     def encode_proprio(self, proprio: torch.Tensor, action_type: torch.Tensor, output_shape) -> torch.Tensor:
         """
@@ -779,35 +869,63 @@ class FlowerModel(nn.Module):
         
         if not self.config.use_proprio:
             return torch.zeros(batch_size, self.config.dit_dim, device=device)
+
+        # proprio = proprio.squeeze(1).to(device)
+        proprio = proprio.mean(dim=1).to(device)
+        # for action_name, action_idx in self.action_space_index.action_spaces.items():
+        #     mask = (action_type == action_idx)
+        #     if mask.any():
+        #         encoded_proprio = self.proprio_encoders[action_name](proprio) # .squeeze(1)
         
-        proprio = proprio.squeeze(1).to(device)
+        encoded_proprio = torch.zeros(batch_size, self.config.dit_dim, device=self.device, dtype=default_dtype)
         for action_name, action_idx in self.action_space_index.action_spaces.items():
             mask = (action_type == action_idx)
             if mask.any():
-                encoded_proprio = self.proprio_encoders[action_name](proprio) # .squeeze(1)
+                adim = self.action_space_index.get_action_dim(action_idx)
+                encoded_proprio[mask] = self.proprio_encoders[action_name](proprio[mask, :adim]).squeeze(1).to(default_dtype)
         return encoded_proprio
     
     def encode_actions(self, z: torch.Tensor, action_type: torch.Tensor) -> torch.Tensor:
         """Encode actions using action-specific encoders."""
-        # device = get_device_from_parameters(self)
-        # default_dtype = next(self.parameters()).dtype
+        batch_size, _, _ = z.shape
+        device = get_device_from_parameters(self)
+        default_dtype = next(self.parameters()).dtype
         
+        # for action_name, action_idx in self.action_space_index.action_spaces.items():
+        #     mask = (action_type == action_idx)
+        #     if mask.any():
+        #         encoded = self.action_encoders[action_name](z)
+
+        encoded = torch.zeros(batch_size, z.shape[1], self.config.dit_dim, device=device, dtype=default_dtype)
+        valid_dims = torch.zeros_like(z, dtype=default_dtype)
         for action_name, action_idx in self.action_space_index.action_spaces.items():
             mask = (action_type == action_idx)
             if mask.any():
-                encoded = self.action_encoders[action_name](z)
+                adim = self.action_space_index.get_action_dim(action_idx)
+                valid_dims[mask, :, :adim] = 1
+                encoded[mask] = self.action_encoders[action_name](z[mask, :, :adim])
         
-        return encoded
+        return encoded, valid_dims
 
-    def decode_actions(self, z: torch.Tensor, action_type: torch.Tensor) -> torch.Tensor:
+    def decode_actions(self, z: torch.Tensor, action_type: torch.Tensor, valid_dims: torch.Tensor) -> torch.Tensor:
         """Decode actions using action-specific decoders."""
-        # device = get_device_from_parameters(self)
-        # default_dtype = next(self.parameters()).dtype
+        device = get_device_from_parameters(self)
+        default_dtype = next(self.parameters()).dtype
         
         for action_name, action_idx in self.action_space_index.action_spaces.items():
             mask = (action_type == action_idx)
             if mask.any():
                 decoded = self.action_decoders[action_name](z)
+
+        batch_size = z.shape[0]
+        max_action_dim = self.action_space_index.get_max_action_dim()
+        decoded = torch.zeros(batch_size, z.shape[1], max_action_dim, device=device, dtype=default_dtype)
+        for action_name, action_idx in self.action_space_index.action_spaces.items():
+            mask = (action_type == action_idx)
+            if mask.any():
+                adim = self.action_space_index.get_action_dim(action_idx)
+                pred = self.action_decoders[action_name](z[mask])
+                decoded[mask, :, :adim] = pred[..., :adim] * valid_dims[mask, :, :adim]
 
         return decoded
 
@@ -825,12 +943,19 @@ class FlowerModel(nn.Module):
             for _ in range(num_chunks)
         ]
         
+        # for action_idx in range(len(self.action_space_index.action_spaces)):
+        #     mask = (action_type == action_idx)
+        #     if mask.any():
+        #         action_name = self.action_space_index.get_action_name(action_idx)
+        #         action_mod = self.adaln[action_name](global_cond)
+        #         for i, signal in enumerate(action_mod):
+        #             mod_signals[i] = signal
+
         for action_idx in range(len(self.action_space_index.action_spaces)):
             mask = (action_type == action_idx)
             if mask.any():
                 action_name = self.action_space_index.get_action_name(action_idx)
-                action_mod = self.adaln[action_name](global_cond)
+                action_mod = self.adaln[action_name](global_cond[mask])
                 for i, signal in enumerate(action_mod):
-                    mod_signals[i] = signal
-        
+                    mod_signals[i][mask] = signal
         return mod_signals

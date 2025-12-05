@@ -334,6 +334,7 @@ def make_pre_post_processors(
             config=policy_cfg,
             dataset_stats=kwargs.get("dataset_stats"),
         )
+    
     elif isinstance(policy_cfg, FlowerConfig):
         from lerobot.policies.flower.processor_flower import make_flower_pre_post_processors
 
@@ -381,8 +382,8 @@ def make_policy(
         NotImplementedError: If attempting to use an unsupported policy-backend
                              combination (e.g., VQBeT with 'mps').
     """
-    if bool(ds_meta) == bool(env_cfg):
-        raise ValueError("Either one of a dataset metadata or a sim env must be provided.")
+    # if bool(ds_meta) == bool(env_cfg):
+    #     raise ValueError("Either one of a dataset metadata or a sim env must be provided.")
 
     # NOTE: Currently, if you try to run vqbet with mps backend, you'll get this error.
     # TODO(aliberts, rcadene): Implement a check_backend_compatibility in policies?
@@ -400,23 +401,23 @@ def make_policy(
     policy_cls = get_policy_class(cfg.type)
 
     kwargs = {}
-    if ds_meta is not None:
-        features = dataset_to_policy_features(ds_meta.features)
-    else:
-        if not cfg.pretrained_path:
-            logging.warning(
-                "You are instantiating a policy from scratch and its features are parsed from an environment "
-                "rather than a dataset. Normalization modules inside the policy will have infinite values "
-                "by default without stats from a dataset."
-            )
-        if env_cfg is None:
-            raise ValueError("env_cfg cannot be None when ds_meta is not provided")
-        features = env_to_policy_features(env_cfg)
-
-    if not cfg.output_features:
-        cfg.output_features = {key: ft for key, ft in features.items() if ft.type is FeatureType.ACTION}
-    if not cfg.input_features:
-        cfg.input_features = {key: ft for key, ft in features.items() if key not in cfg.output_features}
+    # if ds_meta is not None:
+    #     features = dataset_to_policy_features(ds_meta.features)
+    # else:
+    #     if not cfg.pretrained_path:
+    #         logging.warning(
+    #             "You are instantiating a policy from scratch and its features are parsed from an environment "
+    #             "rather than a dataset. Normalization modules inside the policy will have infinite values "
+    #             "by default without stats from a dataset."
+    #         )
+    #     if env_cfg is None:
+    #         raise ValueError("env_cfg cannot be None when ds_meta is not provided")
+    #     features = env_to_policy_features(env_cfg)
+    # input_features，output_features用于preprocessor, postprocessor的NormalizerProcessorStep
+    # if not cfg.output_features:
+    #     cfg.output_features = {key: ft for key, ft in features.items() if ft.type is FeatureType.ACTION}
+    # if not cfg.input_features:
+    #     cfg.input_features = {key: ft for key, ft in features.items() if key not in cfg.output_features}
     kwargs["config"] = cfg
 
     if cfg.pretrained_path:
@@ -433,8 +434,8 @@ def make_policy(
 
     # policy = torch.compile(policy, mode="reduce-overhead")
 
-    if not rename_map:
-        validate_visual_features_consistency(cfg, features)
-        # TODO: (jadechoghari) - add a check_state(cfg, features) and check_action(cfg, features)
+    # if not rename_map:
+        # validate_visual_features_consistency(cfg, features)
+    #     # TODO: (jadechoghari) - add a check_state(cfg, features) and check_action(cfg, features)
 
     return policy

@@ -279,7 +279,36 @@ def edit_dataset(cfg: EditDatasetConfig) -> None:
 
 def main() -> None:
     init_logging()
-    edit_dataset()
+    import os
+    root_path = '/mnt/data/daiwanqin/datasets/sim'
+    # '/mnt/data/daiwanqin/datasets/sim/long_horizon_tasks/split_aloha/stack_multiple_objects'
+    repo_ids = []
+    for dirpath, _, filenames in os.walk(root_path):
+        if 'info.json' in filenames:
+            info_json_path = os.path.abspath(os.path.join(dirpath, 'info.json'))
+            if 'franka' not in info_json_path:
+                continue
+            if 'articulation_tasks' not in info_json_path:
+                continue
+            if ("close_the_electriccooker" not in info_json_path) and ("close_the_laptop" not in info_json_path):
+                continue
+            # if 'heat_the_food_in_the_microwave' in info_json_path:
+            #     continue
+            rel_path = os.path.relpath(info_json_path, root_path)
+            repo_id = '/'.join(rel_path.split('/')[:-2])
+            repo_ids.append(repo_id)
+
+    cfg = EditDatasetConfig(
+        root=root_path,
+        repo_id="a1-franka-02",
+        operation=MergeConfig(
+            type='merge',
+            repo_ids=repo_ids,
+        ),
+        push_to_hub=False,
+    )
+    edit_dataset(cfg)
+    # edit_dataset()
 
 
 if __name__ == "__main__":
