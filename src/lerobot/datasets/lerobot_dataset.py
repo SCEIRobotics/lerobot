@@ -1608,7 +1608,7 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
     ):
         super().__init__()
         self.repo_ids = repo_ids
-        self.root = [Path(root) for root in root] if root else HF_LEROBOT_HOME 
+        self.root = [Path(r) for r in root] if root else HF_LEROBOT_HOME 
         self.tolerances_s = tolerances_s if tolerances_s else dict.fromkeys(repo_ids, 0.0001)
         # Construct the underlying datasets passing everything but `transform` and `delta_timestamps` which
         # are handled by this class.
