@@ -91,7 +91,7 @@ class LeRobotDatasetMetadata:
     ):
         self.repo_id = repo_id
         self.revision = revision if revision else CODEBASE_VERSION
-        self.root = Path(f'{root}/{repo_id}') if root is not None else HF_LEROBOT_HOME / repo_id
+        self.root = Path(root) if root is not None else HF_LEROBOT_HOME / repo_id
         self.writer = None
         self.latest_episode = None
         self.metadata_buffer: list[dict] = []
@@ -510,7 +510,7 @@ class LeRobotDatasetMetadata:
         """Creates metadata for a LeRobotDataset."""
         obj = cls.__new__(cls)
         obj.repo_id = repo_id
-        obj.root = Path(f'{root}/{repo_id}') if root is not None else HF_LEROBOT_HOME / repo_id
+        obj.root = Path(root) if root is not None else HF_LEROBOT_HOME / repo_id
 
         obj.root.mkdir(parents=True, exist_ok=False)
 
@@ -671,8 +671,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         """
         super().__init__()
         self.repo_id = repo_id
-        self.root = Path(root)
-        # Path(f'{root}/{repo_id}') if root else HF_LEROBOT_HOME / repo_id
+        self.root = Path(root) if root else HF_LEROBOT_HOME / repo_id
         self.image_transforms = image_transforms
         # self.delta_timestamps = delta_timestamps
         self.episodes = episodes
@@ -844,7 +843,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
     def load_hf_dataset(self) -> datasets.Dataset:
         """hf_dataset contains all the observations, states, actions, rewards, etc."""
         features = get_hf_features_from_features(self.features)
-        hf_dataset = load_nested_dataset(Path(f'{self.root}/{self.repo_id}/data'), features=features, episodes=self.episodes)
+        hf_dataset = load_nested_dataset(self.root / "data", features=features, episodes=self.episodes)
         hf_dataset.set_transform(hf_transform_to_torch)
         return hf_dataset
 
@@ -998,8 +997,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
             from_timestamp = ep[f"videos/{vid_key}/from_timestamp"]
             shifted_query_ts = [from_timestamp + ts for ts in query_ts]
 
-            video_path = f'{self.root}/{self.repo_id}/{self.meta.get_video_file_path(ep_idx, vid_key)}'
-            # self.root / self.meta.get_video_file_path(ep_idx, vid_key)
+            video_path = self.root / self.meta.get_video_file_path(ep_idx, vid_key)
             frames = decode_video_frames(video_path, shifted_query_ts, self.tolerance_s, self.video_backend)
             item[vid_key] = frames.squeeze(0)
 
@@ -1610,18 +1608,19 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
     ):
         super().__init__()
         self.repo_ids = repo_ids
-        self.root = Path(root) if root else HF_LEROBOT_HOME
+        self.root = [Path(root) for root in root] if root else HF_LEROBOT_HOME 
         self.tolerances_s = tolerances_s if tolerances_s else dict.fromkeys(repo_ids, 0.0001)
         # Construct the underlying datasets passing everything but `transform` and `delta_timestamps` which
         # are handled by this class.
         self._datasets = []
         self.samples = []
         self.sub_samples = {}
-        for sub_id, repo_id in enumerate(repo_ids):
+        for sub_id, (repo_id, root) in enumerate(zip(self.repo_ids, self.root)):
+            print(f"repo_id: {repo_id}, root: {root}")
             sub_dataset = LeRobotDataset(
                 cfg,
                 repo_id,
-                root=self.root,
+                root=root,
                 episodes=episodes[repo_id] if episodes else None,
                 image_transforms=image_transforms,
                 delta_timestamps=delta_timestamps,
