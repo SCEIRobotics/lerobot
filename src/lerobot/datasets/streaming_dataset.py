@@ -80,6 +80,7 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
 
     def __init__(
         self,
+        cfg,
         repo_id: str,
         root: str | Path | None = None,
         episodes: list[int] | None = None,

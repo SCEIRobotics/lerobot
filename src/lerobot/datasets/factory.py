@@ -100,6 +100,7 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
         delta_timestamps = resolve_delta_timestamps(cfg.policy, ds_meta)
         if not cfg.dataset.streaming:
             dataset = LeRobotDataset(
+                cfg.policy,
                 cfg.dataset.repo_id,
                 root=cfg.dataset.root,
                 episodes=cfg.dataset.episodes,
@@ -110,6 +111,7 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
             )
         else:
             dataset = StreamingLeRobotDataset(
+                cfg.policy,
                 cfg.dataset.repo_id,
                 root=cfg.dataset.root,
                 episodes=cfg.dataset.episodes,
