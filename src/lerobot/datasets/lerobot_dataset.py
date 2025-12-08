@@ -1031,12 +1031,15 @@ class LeRobotDataset(torch.utils.data.Dataset):
             item = {**item, **padding}
             for key, val in query_result.items():
                 item[key] = val
-
+        
         if len(self.meta.video_keys) > 0:
-            current_ts = item["timestamp"].item()
-            query_timestamps = self._get_query_timestamps(current_ts, query_indices)
-            video_frames = self._query_videos(query_timestamps, ep_idx)
-            item = {**video_frames, **item}
+            try:
+                current_ts = item["timestamp"].item()
+                query_timestamps = self._get_query_timestamps(current_ts, query_indices)
+                video_frames = self._query_videos(query_timestamps, ep_idx)
+                item = {**video_frames, **item}
+            except Exception as e:
+                return None
 
         if self.image_transforms is not None:
             image_keys = self.meta.camera_keys
@@ -1727,6 +1730,8 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         else:
             raise AssertionError("We expect the loop to break out as long as the index is within bounds.")
         item = self._datasets[dataset_idx][idx - start_idx]
+        if item is None:
+            return None
         item["dataset_index"] = torch.tensor(dataset_idx)
         item['sub_idx'] = self.samples[idx]
         return item
