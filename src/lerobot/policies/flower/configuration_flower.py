@@ -142,18 +142,6 @@ class FlowerConfig(PreTrainedConfig):
 
     def validate_features(self) -> None:
         pass
-        # if len(self.image_features) == 0 and self.env_state_feature is None:
-        #     raise ValueError("You must provide at least one image or the environment state among the inputs.")
-
-        # Check that all input images have the same shape.
-        # a1数据`images.rgb.hand`和`images.rgb.head`的大小并不match，现在是在image_transforms里做resize，这里暂时不进行check
-        # if len(self.image_features) > 0:
-        #     first_image_key, first_image_ft = next(iter(self.image_features.items()))
-        #     for key, image_ft in self.image_features.items():
-        #         if image_ft.shape != first_image_ft.shape:
-        #             raise ValueError(
-        #                 f"`{key}` does not match `{first_image_key}`, but we expect all image shapes to match."
-        #             )
 
     @property
     def observation_delta_indices(self) -> list:

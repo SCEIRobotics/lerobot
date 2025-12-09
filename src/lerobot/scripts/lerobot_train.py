@@ -13,11 +13,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["WANDB_API_KEY"] = "7a17221f579b43949e05faf2a9120c5a6b6506e5"
+os.environ["WANDB_MODE"] = "offline"
 import logging
 import time
 from contextlib import nullcontext
 from pprint import pformat
-from typing import Any
+from typing import Dict, Any, List
 
 import torch
 from accelerate import Accelerator
@@ -50,6 +54,70 @@ from lerobot.utils.utils import (
     has_method,
     init_logging,
 )
+from lerobot.utils.constants import OBS_IMAGES, OBS_STATE, ACTION, MAX_ACTION_DIM
+import torch.nn.functional as F
+
+def process_batch(batch, requires_padding=False):
+    def extract_features(batch: dict, valid_prefixes: str) -> list:
+        features = []
+        sorted_keys = ['joint.position', 'gripper.position', 
+         'left_joint.position', 'left_gripper.position', 
+         'right_joint.position', 'right_gripper.position'
+         ]
+        new_sorted_keys = [f'{valid_prefixes}.' + item for item in sorted_keys]
+        for key in new_sorted_keys:
+            if key in batch:
+                features.append(key)
+        return features
+    
+    # 处理state features
+    if OBS_STATE not in batch or batch[OBS_STATE] is None:
+        state_features = extract_features(batch, 'states')
+        batch[OBS_STATE] = torch.cat([
+            batch[key].unsqueeze(-1) if 'gripper' in key else batch[key] 
+            for key in state_features
+            ], dim=-1)
+    
+    # 处理action features
+    if ACTION not in batch or batch[ACTION] is None:
+        action_features = extract_features(batch, 'actions')
+        batch[ACTION] = torch.cat([
+            batch[key].unsqueeze(-1) if 'gripper' in key else batch[key] 
+            for key in action_features
+            ], dim=-1)
+        
+    if requires_padding:
+        bs, horizon, action_dim = batch[ACTION].shape
+        if action_dim > MAX_ACTION_DIM:
+            raise ValueError(f"原始动作维度{action_dim}超过允许最大维度{MAX_ACTION_DIM}")
+
+        pad = MAX_ACTION_DIM - action_dim
+        pad_params = (0, pad) + (0, 0) * (batch[ACTION].ndim - 1)
+        batch[ACTION] = F.pad(
+            batch[ACTION],
+            pad_params,
+            mode='constant',
+            value=0.0
+        )
+        batch[f'{ACTION}_mask'] = torch.ones(
+            bs, MAX_ACTION_DIM,
+            device=batch[ACTION].device,
+            dtype=torch.bool
+        )
+        if pad > 0:
+            batch[f'{ACTION}_mask'][..., -pad:] = False
+        # batch[f'{ACTION}_mask'] = (
+        #     torch.arange(MAX_ACTION_DIM, device=batch[ACTION].device)
+        #     < original_action_len
+        #     ).repeat(batch[ACTION].shape[0], 1).bool()
+        
+    # 处理action_is_pad features
+    if f'{ACTION}_is_pad' not in batch or batch[f'{ACTION}_is_pad'] is None:
+        filter_keys = [key for key in batch 
+                       if key.startswith('actions') and key.endswith('_is_pad')]
+        batch[f'{ACTION}_is_pad'] = batch[filter_keys[0]]
+    # import pdb; pdb.set_trace()
+    return batch
 
 
 def update_policy(
@@ -140,8 +208,20 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         cfg: A `TrainPipelineConfig` object containing all training configurations.
         accelerator: Optional Accelerator instance. If None, one will be created automatically.
     """
+    # if True:
+    #     repo_ids = []
+    #     roots = []
+    #     project_name = 'lift2' #'sim_lerobot' # basic_tasks/lift2/
+    #     project_dir = f"{cfg.dataset.root}/{project_name}"
+    #     repo_names = os.listdir(project_dir)
+    #     for repo_name in repo_names:
+    #         if repo_name not in ['fold_long_shirts']:
+    #             continue
+    #         repo_ids.append(f'{project_name}/{repo_name}')
+    #         roots.append(f'{project_dir}/{repo_name}')
+    #     cfg.dataset.repo_id = repo_ids
+    #     cfg.dataset.root = roots
     cfg.validate()
-
     # Create Accelerator if not provided
     # It will automatically detect if running in distributed mode or single-process mode
     # We set step_scheduler_with_optimizer=False to prevent accelerate from adjusting the lr_scheduler steps based on the num_processes
@@ -200,48 +280,59 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
 
     if is_main_process:
         logging.info("Creating policy")
-    policy = make_policy(
-        cfg=cfg.policy,
-        ds_meta=dataset.meta,
-        rename_map=cfg.rename_map,
-    )
+    if isinstance(cfg.dataset.repo_id, str):
+        policy = make_policy(
+            cfg=cfg.policy,
+            ds_meta=dataset.meta,
+            rename_map=cfg.rename_map,
+            )
+    else:
+        policy = make_policy(
+            cfg=cfg.policy,
+            ds_meta=None,
+            rename_map=cfg.rename_map,
+            )
 
     # Wait for all processes to finish policy creation before continuing
     accelerator.wait_for_everyone()
 
     # Create processors - only provide dataset_stats if not resuming from saved processors
-    processor_kwargs = {}
-    postprocessor_kwargs = {}
-    if (cfg.policy.pretrained_path and not cfg.resume) or not cfg.policy.pretrained_path:
-        # Only provide dataset_stats when not resuming from saved processor state
+    if isinstance(cfg.dataset.repo_id, str):
+        processor_kwargs = {}
+        postprocessor_kwargs = {}
         processor_kwargs["dataset_stats"] = dataset.meta.stats
+        preprocessor, postprocessor = make_pre_post_processors(
+            policy_cfg=cfg.policy,
+            pretrained_path=cfg.policy.pretrained_path,
+            **processor_kwargs,
+            **postprocessor_kwargs,
+        )
+        shuffle = True
+        sampler = None
+    else:
+        preprocessor, postprocessor = [], []
+        for sub_idx in range(len(dataset._datasets)):
+            processor_kwargs={}
+            postprocessor_kwargs={}
+            processor_kwargs["dataset_stats"] = dataset._datasets[sub_idx].meta.stats
+            if cfg.dataset.use_imagenet_stats:
+                from lerobot.datasets.factory import IMAGENET_STATS
+                for key in dataset._datasets[sub_idx].meta.camera_keys:
+                    for stats_type, stats in IMAGENET_STATS.items():
+                        dataset._datasets[sub_idx].meta.stats[key][stats_type] = torch.tensor(stats, dtype=torch.float32)
 
-    if cfg.policy.pretrained_path is not None:
-        processor_kwargs["preprocessor_overrides"] = {
-            "device_processor": {"device": device.type},
-            "normalizer_processor": {
-                "stats": dataset.meta.stats,
-                "features": {**policy.config.input_features, **policy.config.output_features},
-                "norm_map": policy.config.normalization_mapping,
-            },
-        }
-        processor_kwargs["preprocessor_overrides"]["rename_observations_processor"] = {
-            "rename_map": cfg.rename_map
-        }
-        postprocessor_kwargs["postprocessor_overrides"] = {
-            "unnormalizer_processor": {
-                "stats": dataset.meta.stats,
-                "features": policy.config.output_features,
-                "norm_map": policy.config.normalization_mapping,
-            },
-        }
-
-    preprocessor, postprocessor = make_pre_post_processors(
-        policy_cfg=cfg.policy,
-        pretrained_path=cfg.policy.pretrained_path,
-        **processor_kwargs,
-        **postprocessor_kwargs,
-    )
+            ds_meta = dataset._datasets[sub_idx].meta
+            pre, post = make_pre_post_processors(
+                policy_cfg=cfg.policy,
+                pretrained_path=cfg.policy.pretrained_path,
+                **processor_kwargs,
+                **postprocessor_kwargs,
+            )
+            preprocessor.append(pre)
+            postprocessor.append(post)
+        from lerobot.datasets.lerobot_dataset import SameSubsetSampler
+        shuffle = False
+        sampler = SameSubsetSampler(dataset, batch_size=cfg.batch_size)
 
     if is_main_process:
         logging.info("Creating optimizer and scheduler")
@@ -265,34 +356,48 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         logging.info(f"{dataset.num_frames=} ({format_big_number(dataset.num_frames)})")
         logging.info(f"{dataset.num_episodes=}")
         num_processes = accelerator.num_processes
+        gradient_accumulation_steps = accelerator.gradient_accumulation_steps
         effective_bs = cfg.batch_size * num_processes
-        logging.info(f"Effective batch size: {cfg.batch_size} x {num_processes} = {effective_bs}")
+        logging.info(f"Effective batch size: {cfg.batch_size} x {num_processes} x {gradient_accumulation_steps} = {effective_bs}")
         logging.info(f"{num_learnable_params=} ({format_big_number(num_learnable_params)})")
         logging.info(f"{num_total_params=} ({format_big_number(num_total_params)})")
 
-    # create dataloader for offline training
-    if hasattr(cfg.policy, "drop_n_last_frames"):
-        shuffle = False
-        sampler = EpisodeAwareSampler(
-            dataset.meta.episodes["dataset_from_index"],
-            dataset.meta.episodes["dataset_to_index"],
-            episode_indices_to_use=dataset.episodes,
-            drop_n_last_frames=cfg.policy.drop_n_last_frames,
-            shuffle=True,
-        )
-    else:
-        shuffle = True
-        sampler = None
+    
+    def collate_fn(batch):
+        batch = [item for item in batch if item is not None] # 过滤掉无效的样本
+        if len(batch) == 0:  # 检查 batch 是否为空
+            return None
 
+        all_keys = set()
+        for item in batch:
+            all_keys.update(item.keys())
+        collated_batch = {}
+        for key in all_keys:
+            values = [item[key] for item in batch if key in item]
+            if isinstance(values[0], dict):
+                collated_batch[key]={}
+                info_keys = values[0].keys() if values[0] else []   
+                for info_key in info_keys:
+                    info_values = [info[info_key] for info in values if info_key in info]
+                    collated_batch[key].update({info_key:info_values})
+            elif isinstance(values[0], torch.Tensor):
+                collated_batch[key] = torch.stack(values)
+            elif isinstance(values[0], (int, float)):
+                collated_batch[key] = torch.tensor(values)
+            else:
+                collated_batch[key] = values
+        return collated_batch
+    
     dataloader = torch.utils.data.DataLoader(
         dataset,
-        num_workers=cfg.num_workers,
+        num_workers=0, # cfg.num_workers,
         batch_size=cfg.batch_size,
         shuffle=shuffle and not cfg.dataset.streaming,
         sampler=sampler,
-        pin_memory=device.type == "cuda",
-        drop_last=False,
-        prefetch_factor=2 if cfg.num_workers > 0 else None,
+        collate_fn=collate_fn,
+        # pin_memory=device.type == "cuda",
+        # drop_last=False,
+        # prefetch_factor=2 if cfg.num_workers > 0 else None,
     )
 
     # Prepare everything with accelerator
@@ -326,10 +431,19 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     if is_main_process:
         logging.info("Start offline training on a fixed dataset")
 
-    for _ in range(step, cfg.steps):
+    for batch_idx in range(step, cfg.steps):
         start_time = time.perf_counter()
-        batch = next(dl_iter)
-        batch = preprocessor(batch)
+        batch= next(dl_iter)
+        if batch is None:
+            logging.info(f"Batch {batch_idx}: 全为None，跳过训练")
+            continue
+        if "sub_idx" in batch:
+            batch = preprocessor[batch["sub_idx"][0]](batch)
+            batch = process_batch(batch, requires_padding=True)
+        else:
+            batch = preprocessor(batch)
+            batch = process_batch(batch, requires_padding=True)
+        
         train_tracker.dataloading_s = time.perf_counter() - start_time
 
         train_tracker, output_dict = update_policy(
@@ -370,8 +484,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                     policy=accelerator.unwrap_model(policy),
                     optimizer=optimizer,
                     scheduler=lr_scheduler,
-                    preprocessor=preprocessor,
-                    postprocessor=postprocessor,
+                    preprocessor=preprocessor if not isinstance(preprocessor, list) else None,
+                    postprocessor=postprocessor if not isinstance(postprocessor, list) else None,
                 )
                 update_last_checkpoint(checkpoint_dir)
                 if wandb_logger:
@@ -393,7 +507,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                         postprocessor=postprocessor,
                         n_episodes=cfg.eval.n_episodes,
                         videos_dir=cfg.output_dir / "eval" / f"videos_step_{step_id}",
-                        max_episodes_rendered=4,
+                        max_episodes_rendered=10,
                         start_seed=cfg.seed,
                         max_parallel_tasks=cfg.env.max_parallel_tasks,
                     )
@@ -450,4 +564,6 @@ def main():
 
 
 if __name__ == "__main__":
+    import setproctitle
+    setproctitle.setproctitle("lerobot")
     main()

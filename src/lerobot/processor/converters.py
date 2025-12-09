@@ -166,13 +166,15 @@ def _extract_complementary_data(batch: dict[str, Any]) -> dict[str, Any]:
     Returns:
         A dictionary with the extracted complementary data.
     """
-    mask_keys = {k: v for k, v in batch.items() if "_mask" in k}
+    image_keys = {k: v for k, v in batch.items() if "image" in k}
+    state_keys = {k: v for k, v in batch.items() if "state" in k}
+    action_keys = {k: v for k, v in batch.items() if "action" in k}
     pad_keys = {k: v for k, v in batch.items() if "_is_pad" in k}
     task_key = {"task": batch["task"]} if "task" in batch else {}
     index_key = {"index": batch["index"]} if "index" in batch else {}
     task_index_key = {"task_index": batch["task_index"]} if "task_index" in batch else {}
 
-    return {**mask_keys, **pad_keys, **task_key, **index_key, **task_index_key}
+    return {**image_keys, **state_keys, **action_keys, **pad_keys, **task_key, **index_key, **task_index_key}
 
 
 def create_transition(

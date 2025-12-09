@@ -212,18 +212,23 @@ class FlowerPolicy(PreTrainedPolicy):
         action = self._queues[ACTION].popleft()
         return action
 
+    
+
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, None]:
         """Run the batch through the model and compute the loss for training or validation."""
         batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
+        # 处理image features
         image_features = []
-        for key in list(batch.keys()):
-            if key.startswith('observation.image') and '_is_pad' not in key:
+        VALID_PREFIXES = ('observation.image', 'images')
+        EXCLUDE_KEYWORDS = ('_is_pad',)
+        for key in batch:
+            if not any(kw in key for kw in EXCLUDE_KEYWORDS) and key.startswith(VALID_PREFIXES):
                 image_features.append(key)
         batch[OBS_IMAGES] = torch.stack([batch[key] for key in image_features], dim=-4)
-        # save_image(batch['observation.images'][0,0,0,:,:,:], 'train.png')
+
         loss = self.flower.compute_loss(batch)
+        print(f'loss: {loss}')
         # no output_dict so returning None
-        # print(f'loss: {loss}')
         return loss, None
 
 
@@ -811,6 +816,7 @@ class FlowerModel(nn.Module):
             if self.config.vlm_prompt_style == "default":
                 # Original instruction only
                 robot_type = dataset_batch['info']["robot_type"][idx]
+                robot_type = 'lift2'
                 action_index = self.action_space_index.robot_mapping[robot_type]
                 batch_action_index.append(action_index)
                 instruction = generate_policy_prompt(
@@ -823,17 +829,6 @@ class FlowerModel(nn.Module):
                     )
                 text_prompts.append(instruction)
                 # text_prompts.append(self.format_instruction(instruction))
-                
-            elif self.config.vlm_prompt_style == "feature_focused":
-                # Focus on extracting visual features relevant for manipulation
-                prompt = f"<od>{instruction}</od><grounding>identify objects and spatial relationships for robotic manipulation</grounding>"
-                text_prompts.append(prompt)
-                
-            elif self.config.vlm_prompt_style == "state_oriented":
-                # Focus on extracting state-relevant features
-                prompt = f"<od>{instruction}</od><referring_expression_segmentation>locate objects and regions for manipulation</referring_expression_segmentation>"
-                text_prompts.append(prompt)
-                
             else:
                 raise ValueError(f"Unknown prompt style: {self.config.vlm_prompt_style}")
         

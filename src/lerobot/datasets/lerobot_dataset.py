@@ -101,7 +101,6 @@ class LeRobotDatasetMetadata:
             if force_cache_sync:
                 raise FileNotFoundError
             self.load_metadata()
-            print(f"Loaded metadata for {self.repo_id}@{self.revision}")
         except (FileNotFoundError, NotADirectoryError):
             if is_valid_version(self.revision):
                 self.revision = get_safe_version(self.repo_id, self.revision)
@@ -1029,7 +1028,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
             item = {**item, **padding}
             for key, val in query_result.items():
                 item[key] = val
-        
+
         if len(self.meta.video_keys) > 0:
             try:
                 current_ts = item["timestamp"].item()
@@ -1048,58 +1047,6 @@ class LeRobotDataset(torch.utils.data.Dataset):
         task_idx = item["task_index"].item()
         item["task"] = self.meta.tasks.iloc[task_idx].name
         item["info"] = {'robot_type': self.meta.info['robot_type']}
-        valid_robots = ['franka','lift2', 'split_aloha', 'genie1']
-        for robot in valid_robots:
-            if robot in str(self.repo_id):
-                item['info'] = {'robot_type':robot}
-                break
-        else:
-            raise ValueError(f"Robot type not found in {str(self.root)}")
-        # 适配a1数据
-        valid_action_key = [
-            'actions.joint.position', 'actions.gripper.position',
-            'actions.left_joint.position', 'actions.left_gripper.position',
-            'actions.right_joint.position', 'actions.right_gripper.position'
-            ]
-        valid_state_key = [
-            'states.joint.position', 'states.gripper.position',
-            'states.left_joint.position', 'states.left_gripper.position',
-            'states.right_joint.position', 'states.right_gripper.position'
-            ]
-        if 'action' not in item:
-            action_tensors = []
-            action_is_pad = None
-            for key in valid_action_key:
-                if key in item:
-                    action_tensor = item[key]
-                    if 'gripper' in key:
-                        action_tensor = action_tensor.unsqueeze(-1)
-                    action_tensors.append(action_tensor)
-                    action_is_pad = item[f'{key}_is_pad']  # 取任意一个valid_action_key的is_pad
-            item['action'] = torch.cat(action_tensors, dim=-1)
-            item['action_is_pad'] = action_is_pad
-        if 'observation.state' not in item:
-            state_tensors = []
-            state_is_pad = None   
-            for key in valid_state_key:
-                if key in item:
-                    state_tensor = item[key]
-                    if 'gripper' in key:
-                        state_tensor = state_tensor.unsqueeze(-1)
-                    state_tensors.append(state_tensor)
-                    state_is_pad = item[f'{key}_is_pad']  # 取任意一个valid_state_key的is_pad
-            item['observation.state'] = torch.cat(state_tensors, dim=-1)
-            item['observation.state_is_pad'] = state_is_pad
-
-        pad = [0, MAX_ACTION_DIM - item['action'].shape[-1]]
-        item['action_mask'] = (torch.arange(MAX_ACTION_DIM) < item['action'].shape[-1]).bool()
-        item['action'] = F.pad(item['action'], pad, mode='constant', value=0.0)
-        item['observation.state_mask'] = (torch.arange(MAX_ACTION_DIM) < item['observation.state'].shape[-1]).bool()
-        item['observation.state'] = F.pad(item['observation.state'], pad, mode='constant', value=0.0)
-        for key in list(item.keys()):
-            if key.startswith("images"):
-                new_key = key.replace("images", "observation.image")
-                item[new_key] = item[key]
         return item
     
     def __repr__(self):
@@ -1616,7 +1563,6 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         self.samples = []
         self.sub_samples = {}
         for sub_id, (repo_id, root) in enumerate(zip(self.repo_ids, self.root)):
-            print(f"repo_id: {repo_id}, root: {root}")
             sub_dataset = LeRobotDataset(
                 cfg,
                 repo_id,

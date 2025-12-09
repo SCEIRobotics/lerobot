@@ -274,6 +274,20 @@ class _NormalizationMixin:
         """
         processed_action = self._apply_transform(action, ACTION, FeatureType.ACTION, inverse=inverse)
         return processed_action
+    
+    def _normalize_others(self, others: Tensor, inverse: bool) -> Tensor:
+        new_observation = dict(others)
+        for key, val in new_observation.items():
+            if key.startswith("images"):
+                tensor = torch.as_tensor(new_observation[key])
+                new_observation[key] = self._apply_transform(tensor, key, FeatureType.VISUAL, inverse=inverse)
+            if key.startswith("states"):
+                tensor = torch.as_tensor(new_observation[key])
+                new_observation[key] = self._apply_transform(tensor, key, FeatureType.STATE, inverse=inverse)
+            elif key.startswith("actions"):
+                tensor = torch.as_tensor(new_observation[key])
+                new_observation[key] = self._apply_transform(tensor, key, FeatureType.ACTION, inverse=inverse)
+        return new_observation
 
     def _apply_transform(
         self, tensor: Tensor, key: str, feature_type: FeatureType, *, inverse: bool = False
@@ -451,6 +465,8 @@ class NormalizerProcessorStep(_NormalizationMixin, ProcessorStep):
             new_transition[TransitionKey.OBSERVATION] = self._normalize_observation(
                 observation, inverse=False
             )
+        others = new_transition.get(TransitionKey.COMPLEMENTARY_DATA)
+        new_transition[TransitionKey.COMPLEMENTARY_DATA] = self._normalize_others(others, inverse=False)
 
         # Handle action normalization.
         action = new_transition.get(TransitionKey.ACTION)
@@ -513,6 +529,8 @@ class UnnormalizerProcessorStep(_NormalizationMixin, ProcessorStep):
         observation = new_transition.get(TransitionKey.OBSERVATION)
         if observation is not None:
             new_transition[TransitionKey.OBSERVATION] = self._normalize_observation(observation, inverse=True)
+        others = new_transition.get(TransitionKey.COMPLEMENTARY_DATA)
+        new_transition[TransitionKey.COMPLEMENTARY_DATA] = self._normalize_others(others, inverse=True)
 
         # Handle action unnormalization.
         action = new_transition.get(TransitionKey.ACTION)

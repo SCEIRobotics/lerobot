@@ -66,7 +66,7 @@ def resolve_delta_timestamps(
         for key in ds_meta.features:  # 适配a1数据
             if key.startswith("action") and cfg.action_delta_indices is not None:
                 delta_timestamps[key] = [i / ds_meta.fps for i in cfg.action_delta_indices]
-            if key.startswith("states") and cfg.action_delta_indices is not None:
+            if key.startswith("state") and cfg.observation_delta_indices is not None:
                 delta_timestamps[key] = [i / ds_meta.fps for i in cfg.observation_delta_indices]
             if key.startswith("image") and cfg.observation_delta_indices is not None:
                 delta_timestamps[key] = [i / ds_meta.fps for i in cfg.observation_delta_indices]
@@ -135,10 +135,5 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
             "Multiple datasets were provided. Applied the following index mapping to the provided datasets: "
             f"{pformat(dataset.repo_id_to_index, indent=2)}"
         )
-
-    # if cfg.dataset.use_imagenet_stats:
-    #     for key in dataset.meta.camera_keys:
-    #         for stats_type, stats in IMAGENET_STATS.items():
-    #             dataset.meta.stats[key][stats_type] = torch.tensor(stats, dtype=torch.float32)
 
     return dataset
