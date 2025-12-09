@@ -54,8 +54,6 @@ class TrainPipelineConfig(HubMixin):
     num_workers: int = 4
     batch_size: int = 8
     steps: int = 100_000
-    val_set_ratio: float = 0.1
-    val_eval_freq: int = -1
     eval_freq: int = 20_000
     log_freq: int = 200
     save_checkpoint: bool = True
@@ -117,9 +115,6 @@ class TrainPipelineConfig(HubMixin):
             now = dt.datetime.now()
             train_dir = f"{now:%Y-%m-%d}/{now:%H-%M-%S}_{self.job_name}"
             self.output_dir = Path("outputs/train") / train_dir
-
-        # if isinstance(self.dataset.repo_id, list):
-        #     raise NotImplementedError("LeRobotMultiDataset is not currently implemented.")
 
         if not self.use_policy_training_preset and (self.optimizer is None or self.scheduler is None):
             raise ValueError("Optimizer and Scheduler must be set when the policy presets are not used.")

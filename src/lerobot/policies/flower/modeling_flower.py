@@ -212,22 +212,19 @@ class FlowerPolicy(PreTrainedPolicy):
         action = self._queues[ACTION].popleft()
         return action
 
-    
-
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, None]:
         """Run the batch through the model and compute the loss for training or validation."""
         batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
         # 处理image features
-        image_features = []
+        image_keys = []
         VALID_PREFIXES = ('observation.image', 'images')
         EXCLUDE_KEYWORDS = ('_is_pad',)
         for key in batch:
             if not any(kw in key for kw in EXCLUDE_KEYWORDS) and key.startswith(VALID_PREFIXES):
-                image_features.append(key)
-        batch[OBS_IMAGES] = torch.stack([batch[key] for key in image_features], dim=-4)
-
+                image_keys.append(key)
+        batch[OBS_IMAGES] = torch.stack([batch[key] for key in image_keys], dim=-4)
         loss = self.flower.compute_loss(batch)
-        print(f'loss: {loss}')
+        
         # no output_dict so returning None
         return loss, None
 

@@ -184,7 +184,6 @@ class ProcessorConfigKwargs(TypedDict, total=False):
 def make_pre_post_processors(
     policy_cfg: PreTrainedConfig,
     pretrained_path: str | None = None,
-    ds_meta: LeRobotDatasetMetadata | None = None,
     **kwargs: Unpack[ProcessorConfigKwargs],
 ) -> tuple[
     PolicyProcessorPipeline[dict[str, Any], dict[str, Any]],
@@ -410,21 +409,24 @@ def make_policy(
         if not cfg.input_features:
             cfg.input_features = {key: ft for key, ft in features.items() if key not in cfg.output_features}
     else:
-        if not cfg.pretrained_path:
+        if not cfg.pretrained_path and env_cfg is not None:  
             logging.warning(
                 "You are instantiating a policy from scratch and its features are parsed from an environment "
                 "rather than a dataset. Normalization modules inside the policy will have infinite values "
                 "by default without stats from a dataset."
-            )
-        if env_cfg is not None:   
+            ) 
             features = env_to_policy_features(env_cfg)
-            if not cfg.output_features:
-                cfg.output_features = {key: ft for key, ft in features.items() if ft.type is FeatureType.ACTION}
-            if not cfg.input_features:
-                cfg.input_features = {key: ft for key, ft in features.items() if key not in cfg.output_features}
+        else:
+            features = {}
+            
+    if not cfg.output_features:
+        cfg.output_features = {key: ft for key, ft in features.items() if ft.type is FeatureType.ACTION}
+    if not cfg.input_features:
+        cfg.input_features = {key: ft for key, ft in features.items() if key not in cfg.output_features}
+    
     print(f"input_features: {cfg.input_features}")
     print(f"output_features: {cfg.output_features}")
-    
+
     kwargs["config"] = cfg
 
     if cfg.pretrained_path:

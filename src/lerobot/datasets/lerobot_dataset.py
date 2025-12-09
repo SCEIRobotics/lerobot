@@ -75,10 +75,7 @@ from lerobot.datasets.video_utils import (
     get_video_info,
 )
 from lerobot.utils.constants import HF_LEROBOT_HOME
-import torch.nn.functional as F
-import torchvision.transforms as T
 CODEBASE_VERSION = "v3.0"
-from lerobot.utils.constants import MAX_ACTION_DIM
 
 class LeRobotDatasetMetadata:
     def __init__(
@@ -672,7 +669,6 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self.repo_id = repo_id
         self.root = Path(root) if root else HF_LEROBOT_HOME / repo_id
         self.image_transforms = image_transforms
-        # self.delta_timestamps = delta_timestamps
         self.episodes = episodes
         self.tolerance_s = tolerance_s
         self.revision = revision if revision else CODEBASE_VERSION
@@ -727,7 +723,6 @@ class LeRobotDataset(torch.utils.data.Dataset):
         if self.delta_timestamps is not None:
             check_delta_timestamps(self.delta_timestamps, self.fps, self.tolerance_s)
             self.delta_indices = get_delta_indices(self.delta_timestamps, self.fps)
-        self.resize = T.Resize((112,112))
         
     def _close_writer(self) -> None:
         """Close and cleanup the parquet writer if it exists."""
@@ -997,10 +992,16 @@ class LeRobotDataset(torch.utils.data.Dataset):
             shifted_query_ts = [from_timestamp + ts for ts in query_ts]
 
             video_path = self.root / self.meta.get_video_file_path(ep_idx, vid_key)
-            frames = decode_video_frames(video_path, shifted_query_ts, self.tolerance_s, self.video_backend)
+            valid = True
+            try:
+                frames = decode_video_frames(video_path, shifted_query_ts, self.tolerance_s, self.video_backend)
+            except:
+                shape = self.meta.info['features'][vid_key]['shape']
+                frames = torch.zeros((len(shifted_query_ts), 3, shape[0], shape[1]))
+                valid = False
             item[vid_key] = frames.squeeze(0)
 
-        return item
+        return item, valid
 
     def _ensure_hf_dataset_loaded(self):
         """Lazy load the HF dataset only when needed for reading."""
@@ -1033,20 +1034,21 @@ class LeRobotDataset(torch.utils.data.Dataset):
             try:
                 current_ts = item["timestamp"].item()
                 query_timestamps = self._get_query_timestamps(current_ts, query_indices)
-                video_frames = self._query_videos(query_timestamps, ep_idx)
+                video_frames, valid = self._query_videos(query_timestamps, ep_idx)
                 item = {**video_frames, **item}
             except Exception as e:
-                return None
-
+                return None      
         if self.image_transforms is not None:
             image_keys = self.meta.camera_keys
             for cam in image_keys:
                 item[cam] = self.image_transforms(item[cam])
+                import torchvision.transforms as T
+                self.resize = T.Resize((112,112))
                 item[cam] = self.resize(item[cam])
         # Add task as a string
         task_idx = item["task_index"].item()
         item["task"] = self.meta.tasks.iloc[task_idx].name
-        item["info"] = {'robot_type': self.meta.info['robot_type']}
+        item["info"] = {'robot_type': self.meta.info['robot_type'], 'valid': valid}
         return item
     
     def __repr__(self):

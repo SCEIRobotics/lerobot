@@ -14,9 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import os
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-os.environ["WANDB_API_KEY"] = "7a17221f579b43949e05faf2a9120c5a6b6506e5"
-os.environ["WANDB_MODE"] = "offline"
 import logging
 import time
 from contextlib import nullcontext
@@ -300,15 +297,36 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     if isinstance(cfg.dataset.repo_id, str):
         processor_kwargs = {}
         postprocessor_kwargs = {}
-        processor_kwargs["dataset_stats"] = dataset.meta.stats
+        if (cfg.policy.pretrained_path and not cfg.resume) or not cfg.policy.pretrained_path:
+            # Only provide dataset_stats when not resuming from saved processor state
+            processor_kwargs["dataset_stats"] = dataset.meta.stats
+
+        if cfg.policy.pretrained_path is not None:
+            processor_kwargs["preprocessor_overrides"] = {
+                "device_processor": {"device": device.type},
+                "normalizer_processor": {
+                    "stats": dataset.meta.stats,
+                    "features": {**policy.config.input_features, **policy.config.output_features},
+                    "norm_map": policy.config.normalization_mapping,
+                },
+            }
+            processor_kwargs["preprocessor_overrides"]["rename_observations_processor"] = {
+                "rename_map": cfg.rename_map
+            }
+            postprocessor_kwargs["postprocessor_overrides"] = {
+                "unnormalizer_processor": {
+                    "stats": dataset.meta.stats,
+                    "features": policy.config.output_features,
+                    "norm_map": policy.config.normalization_mapping,
+                },
+            }
+
         preprocessor, postprocessor = make_pre_post_processors(
             policy_cfg=cfg.policy,
             pretrained_path=cfg.policy.pretrained_path,
             **processor_kwargs,
             **postprocessor_kwargs,
         )
-        shuffle = True
-        sampler = None
     else:
         preprocessor, postprocessor = [], []
         for sub_idx in range(len(dataset._datasets)):
@@ -321,7 +339,6 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                     for stats_type, stats in IMAGENET_STATS.items():
                         dataset._datasets[sub_idx].meta.stats[key][stats_type] = torch.tensor(stats, dtype=torch.float32)
 
-            ds_meta = dataset._datasets[sub_idx].meta
             pre, post = make_pre_post_processors(
                 policy_cfg=cfg.policy,
                 pretrained_path=cfg.policy.pretrained_path,
@@ -330,9 +347,6 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             )
             preprocessor.append(pre)
             postprocessor.append(post)
-        from lerobot.datasets.lerobot_dataset import SameSubsetSampler
-        shuffle = False
-        sampler = SameSubsetSampler(dataset, batch_size=cfg.batch_size)
 
     if is_main_process:
         logging.info("Creating optimizer and scheduler")
@@ -388,6 +402,25 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                 collated_batch[key] = values
         return collated_batch
     
+    # create dataloader for offline training
+    if isinstance(cfg.dataset.repo_id, str):
+        if hasattr(cfg.policy, "drop_n_last_frames"):
+            shuffle = False
+            sampler = EpisodeAwareSampler(
+                dataset.meta.episodes["dataset_from_index"],
+                dataset.meta.episodes["dataset_to_index"],
+                episode_indices_to_use=dataset.episodes,
+                drop_n_last_frames=cfg.policy.drop_n_last_frames,
+                shuffle=True,
+            )
+        else:
+            shuffle = True
+            sampler = None
+    else:
+        from lerobot.datasets.lerobot_dataset import SameSubsetSampler
+        shuffle = False
+        sampler = SameSubsetSampler(dataset, batch_size=cfg.batch_size)
+
     dataloader = torch.utils.data.DataLoader(
         dataset,
         num_workers=0, # cfg.num_workers,
