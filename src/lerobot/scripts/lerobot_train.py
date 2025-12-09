@@ -205,19 +205,6 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         cfg: A `TrainPipelineConfig` object containing all training configurations.
         accelerator: Optional Accelerator instance. If None, one will be created automatically.
     """
-    # if True:
-    #     repo_ids = []
-    #     roots = []
-    #     project_name = 'lift2' #'sim_lerobot' # basic_tasks/lift2/
-    #     project_dir = f"{cfg.dataset.root}/{project_name}"
-    #     repo_names = os.listdir(project_dir)
-    #     for repo_name in repo_names:
-    #         if repo_name not in ['fold_long_shirts']:
-    #             continue
-    #         repo_ids.append(f'{project_name}/{repo_name}')
-    #         roots.append(f'{project_dir}/{repo_name}')
-    #     cfg.dataset.repo_id = repo_ids
-    #     cfg.dataset.root = roots
     cfg.validate()
     # Create Accelerator if not provided
     # It will automatically detect if running in distributed mode or single-process mode
@@ -423,14 +410,14 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
 
     dataloader = torch.utils.data.DataLoader(
         dataset,
-        num_workers=0, # cfg.num_workers,
+        num_workers=cfg.num_workers,
         batch_size=cfg.batch_size,
         shuffle=shuffle and not cfg.dataset.streaming,
         sampler=sampler,
         collate_fn=collate_fn,
-        # pin_memory=device.type == "cuda",
-        # drop_last=False,
-        # prefetch_factor=2 if cfg.num_workers > 0 else None,
+        pin_memory=device.type == "cuda",
+        drop_last=False,
+        prefetch_factor=2 if cfg.num_workers > 0 else None,
     )
 
     # Prepare everything with accelerator
@@ -472,10 +459,10 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             continue
         if "sub_idx" in batch:
             batch = preprocessor[batch["sub_idx"][0]](batch)
-            batch = process_batch(batch, requires_padding=True)
+            batch = process_batch(batch, requires_padding=False)
         else:
             batch = preprocessor(batch)
-            batch = process_batch(batch, requires_padding=True)
+            batch = process_batch(batch, requires_padding=False)
         
         train_tracker.dataloading_s = time.perf_counter() - start_time
 

@@ -1042,9 +1042,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
             image_keys = self.meta.camera_keys
             for cam in image_keys:
                 item[cam] = self.image_transforms(item[cam])
-                import torchvision.transforms as T
-                self.resize = T.Resize((112,112))
-                item[cam] = self.resize(item[cam])
+                
         # Add task as a string
         task_idx = item["task_index"].item()
         item["task"] = self.meta.tasks.iloc[task_idx].name
