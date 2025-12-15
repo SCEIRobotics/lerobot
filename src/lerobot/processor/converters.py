@@ -398,7 +398,7 @@ def transition_to_batch(transition: EnvTransition) -> dict[str, Any]:
     observation = transition.get(TransitionKey.OBSERVATION)
     if isinstance(observation, dict):
         batch.update(observation)
-
+    # batch[ACTION] = transition.get(TransitionKey.ACTION)
     return batch
 
 

@@ -121,19 +121,34 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
                 max_num_shards=cfg.num_workers,
             )
     else:
-        # raise NotImplementedError("The MultiLeRobotDataset isn't supported for now.")
-        dataset = MultiLeRobotDataset(
-            cfg.policy,
-            cfg.dataset.repo_id,
-            root=cfg.dataset.root,
-            # TODO(aliberts): add proper support for multi dataset
-            delta_timestamps=None,
-            image_transforms=image_transforms,
-            video_backend=cfg.dataset.video_backend,
-        )
-        logging.info(
-            "Multiple datasets were provided. Applied the following index mapping to the provided datasets: "
-            f"{pformat(dataset.repo_id_to_index, indent=2)}"
-        )
+        if not cfg.dataset.streaming:
+            dataset = MultiLeRobotDataset(
+                cfg.policy,
+                cfg.dataset.repo_id,
+                root=cfg.dataset.root,
+                # TODO(aliberts): add proper support for multi dataset
+                # delta_timestamps=delta_timestamps,
+                image_transforms=image_transforms,
+                video_backend=cfg.dataset.video_backend,
+            )
+            logging.info(
+                "Multiple datasets were provided. Applied the following index mapping to the provided datasets: "
+                f"{pformat(dataset.repo_id_to_index, indent=2)}"
+            )
+        else:
+            dataset = []
+            for sub_idx, (repo_id, root) in enumerate(zip(cfg.dataset.repo_id, cfg.dataset.root)):
+                ds = StreamingLeRobotDataset(
+                    cfg.policy,
+                    repo_id,
+                    root=root,
+                    episodes=cfg.dataset.episodes,
+                    # delta_timestamps=delta_timestamps,
+                    image_transforms=image_transforms,
+                    revision=cfg.dataset.revision,
+                    # max_num_shards=cfg.num_workers,
+                    sub_id=sub_idx,
+                )
+                dataset.append(ds)
 
     return dataset

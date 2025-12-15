@@ -38,6 +38,9 @@ from lerobot.datasets.video_utils import (
     decode_video_frames_torchcodec,
 )
 from lerobot.utils.constants import HF_LEROBOT_HOME, LOOKAHEAD_BACKTRACKTABLE, LOOKBACK_BACKTRACKTABLE
+import random
+import torchvision.transforms as T
+RESIZE = T.Resize((224,224))
 
 
 class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
@@ -91,10 +94,11 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         force_cache_sync: bool = False,
         streaming: bool = True,
         buffer_size: int = 1000,
-        max_num_shards: int = 16,
+        max_num_shards: int = 64,
         seed: int = 42,
         rng: np.random.Generator | None = None,
         shuffle: bool = True,
+        sub_id: int = 0,
     ):
         """Initialize a StreamingLeRobotDataset.
 
@@ -144,11 +148,16 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
 
         self.delta_timestamps = None
         self.delta_indices = None
-
+        self.sub_id = sub_id
         if delta_timestamps is not None:
             self._validate_delta_timestamp_keys(delta_timestamps)  # raises ValueError if invalid
             self.delta_timestamps = delta_timestamps
             self.delta_indices = get_delta_indices(self.delta_timestamps, self.fps)
+        else:
+            from lerobot.datasets.factory import resolve_delta_timestamps
+            self.delta_timestamps = resolve_delta_timestamps(cfg, self.meta)
+            self.delta_indices = get_delta_indices(self.delta_timestamps, self.fps)
+
 
         self.hf_dataset: datasets.IterableDataset = load_dataset(
             self.repo_id if not self.streaming_from_local else str(self.root),
@@ -294,7 +303,6 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
                 else:
                     frames.append(padding_frame)
                     mask.append(True)
-
             padding_mask[f"{video_key}_is_pad"] = torch.BoolTensor(mask)
 
         return padding_mask
@@ -310,7 +318,8 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         ep_idx = item["episode_index"]
 
         # "timestamp" restarts from 0 for each episode, whereas we need a global timestep within the single .mp4 file (given by index/fps)
-        current_ts = item["index"] / self.fps
+        # current_ts = item["index"] / self.fps  # 和原始dataset定义有冲突
+        current_ts = item["timestamp"].item()
 
         episode_boundaries_ts = {
             key: (
@@ -334,28 +343,34 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
             query_timestamps = self._get_query_timestamps(
                 current_ts, self.delta_indices, episode_boundaries_ts
             )
-            video_frames = self._query_videos(query_timestamps, ep_idx)
+            video_frames, valid = self._query_videos(query_timestamps, ep_idx)
 
             if self.image_transforms is not None:
                 image_keys = self.meta.camera_keys
                 for cam in image_keys:
                     video_frames[cam] = self.image_transforms(video_frames[cam])
+                    # video_frames[cam] = RESIZE(video_frames[cam])
 
             updates.append(video_frames)
 
-            if self.delta_indices is not None:
-                # We always return the same number of frames. Unavailable frames are padded.
-                padding_mask = self._get_video_frame_padding_mask(
-                    video_frames, query_timestamps, original_timestamps
-                )
-                updates.append(padding_mask)
+            # if self.delta_indices is not None:
+            #     # We always return the same number of frames. Unavailable frames are padded.
+            #     padding_mask = self._get_video_frame_padding_mask(
+            #         video_frames, query_timestamps, original_timestamps
+            #     )
+            #     updates.append(padding_mask)
 
         result = item.copy()
         for update in updates:
             result.update(update)
-
+        result["sub_id"] = self.sub_id
         result["task"] = self.meta.tasks.iloc[item["task_index"]].name
-
+        result["info"] = {'robot_type': self.meta.info['robot_type'], 'valid': valid, 'sub_id': self.sub_id}
+        # valid_robots = ['franka','lift2', 'split_aloha', 'genie1']
+        # for robot in valid_robots:
+        #     if robot in str(self.repo_id):
+        #         result['info']['robot_type'] = robot
+        #         break
         yield result
 
     def _get_query_timestamps(
@@ -390,13 +405,19 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         for video_key, query_ts in query_timestamps.items():
             root = self.meta.url_root if self.streaming and not self.streaming_from_local else self.root
             video_path = f"{root}/{self.meta.get_video_file_path(ep_idx, video_key)}"
-            frames = decode_video_frames_torchcodec(
-                video_path, query_ts, self.tolerance_s, decoder_cache=self.video_decoder_cache
-            )
-
-            item[video_key] = frames.squeeze(0) if len(query_ts) == 1 else frames
-
-        return item
+            valid = True
+            try:
+                frames = decode_video_frames_torchcodec(
+                    video_path, query_ts, self.tolerance_s, decoder_cache=self.video_decoder_cache
+                )
+            except:
+                shape = self.meta.info['features'][video_key]['shape']
+                frames = torch.zeros((len(query_ts), 3, shape[0], shape[1]))
+                valid = False
+            # item[video_key] = frames.squeeze(0) if len(query_ts) == 1 else frames
+            item[video_key] = frames
+            # print(f"video_key: {video_key}, valid: {valid}")
+        return item, valid
 
     def _get_delta_frames(self, dataset_iterator: Backtrackable, current_item: dict):
         # TODO(fracapuano): Modularize this function, refactor the code

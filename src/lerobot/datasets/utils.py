@@ -1197,7 +1197,7 @@ def item_to_torch(item: dict) -> dict:
         dict: Dictionary with all tensor-like items converted to torch.Tensor.
     """
     for key, val in item.items():
-        if isinstance(val, (np.ndarray | list)) and key not in ["task"]:
+        if isinstance(val, (np.ndarray | list | float)) and key not in ["task"]:
             # Convert numpy arrays and lists to torch tensors
             item[key] = torch.tensor(val)
     return item

@@ -404,10 +404,6 @@ def make_policy(
     kwargs = {}
     if ds_meta is not None:
         features = dataset_to_policy_features(ds_meta.features)
-        if not cfg.output_features:
-            cfg.output_features = {key: ft for key, ft in features.items() if ft.type is FeatureType.ACTION}
-        if not cfg.input_features:
-            cfg.input_features = {key: ft for key, ft in features.items() if key not in cfg.output_features}
     else:
         if not cfg.pretrained_path and env_cfg is not None:  
             logging.warning(
@@ -417,6 +413,7 @@ def make_policy(
             ) 
             features = env_to_policy_features(env_cfg)
         else:
+            logging.warning("no features provided ...") 
             features = {}
             
     if not cfg.output_features:
@@ -426,7 +423,6 @@ def make_policy(
     
     print(f"input_features: {cfg.input_features}")
     print(f"output_features: {cfg.output_features}")
-
     kwargs["config"] = cfg
 
     if cfg.pretrained_path:

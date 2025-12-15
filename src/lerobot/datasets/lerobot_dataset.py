@@ -76,6 +76,9 @@ from lerobot.datasets.video_utils import (
 )
 from lerobot.utils.constants import HF_LEROBOT_HOME
 CODEBASE_VERSION = "v3.0"
+import torchvision.transforms as T
+RESIZE = T.Resize((224,224))
+
 
 class LeRobotDatasetMetadata:
     def __init__(
@@ -999,7 +1002,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
                 shape = self.meta.info['features'][vid_key]['shape']
                 frames = torch.zeros((len(shifted_query_ts), 3, shape[0], shape[1]))
                 valid = False
-            item[vid_key] = frames.squeeze(0)
+            item[vid_key] = frames  # frames.squeeze(0)
 
         return item, valid
 
@@ -1031,22 +1034,26 @@ class LeRobotDataset(torch.utils.data.Dataset):
                 item[key] = val
 
         if len(self.meta.video_keys) > 0:
-            try:
-                current_ts = item["timestamp"].item()
-                query_timestamps = self._get_query_timestamps(current_ts, query_indices)
-                video_frames, valid = self._query_videos(query_timestamps, ep_idx)
-                item = {**video_frames, **item}
-            except Exception as e:
-                return None      
+            current_ts = item["timestamp"].item()
+            query_timestamps = self._get_query_timestamps(current_ts, query_indices)
+            video_frames, valid = self._query_videos(query_timestamps, ep_idx)
+            item = {**video_frames, **item}
         if self.image_transforms is not None:
             image_keys = self.meta.camera_keys
             for cam in image_keys:
                 item[cam] = self.image_transforms(item[cam])
-                
+                # item[cam] = RESIZE(item[cam])
         # Add task as a string
         task_idx = item["task_index"].item()
         item["task"] = self.meta.tasks.iloc[task_idx].name
         item["info"] = {'robot_type': self.meta.info['robot_type'], 'valid': valid}
+        # valid_robots = ['franka','lift2', 'split_aloha', 'genie1']
+        # for robot in valid_robots:
+        #     if robot in str(self.repo_id):
+        #         item['info']['robot_type'] = robot
+        #         break
+        #     else:
+        #         item['info']['robot_type'] = 'genie1'
         return item
     
     def __repr__(self):
@@ -1675,8 +1682,6 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         else:
             raise AssertionError("We expect the loop to break out as long as the index is within bounds.")
         item = self._datasets[dataset_idx][idx - start_idx]
-        if item is None:
-            return None
         item["dataset_index"] = torch.tensor(dataset_idx)
         item['sub_idx'] = self.samples[idx]
         return item

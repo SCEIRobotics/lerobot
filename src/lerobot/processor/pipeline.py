@@ -1519,6 +1519,16 @@ class RobotActionProcessorStep(ProcessorStep, ABC):
         new_transition = self._current_transition
 
         action = new_transition.get(TransitionKey.ACTION)
+        action = {
+            'joint_1.pos': action[:,0],
+            'joint_2.pos': action[:,1],
+            'joint_3.pos': action[:,2],
+            'joint_4.pos': action[:,3],
+            'joint_5.pos': action[:,4],
+            'joint_6.pos': action[:,5],
+            'joint_7.pos': action[:,6],
+            'gripper.pos': action[:,7],
+        }
         if action is None or not isinstance(action, dict):
             raise ValueError(f"Action should be a RobotAction type (dict), but got {type(action)}")
 

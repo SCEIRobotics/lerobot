@@ -61,7 +61,9 @@ from lerobot.policies.flower.transformers_flower import (
     stateless_norm
 )
 from torchvision.utils import save_image
-
+DEFAULT_DTYPE = torch.float32
+# torch.bfloat16
+# torch.float32
 
 class FlowerPolicy(PreTrainedPolicy):
     """
@@ -143,14 +145,15 @@ class FlowerPolicy(PreTrainedPolicy):
         # stack n latest observations from the queue
         # import pdb; pdb.set_trace()
         # batch = {k: torch.stack(list(self._queues[k]), dim=1) for k in batch if k in self._queues}
-        for k in batch:
-            if k in self._queues:
-                if k=='task':
-                    # batch[k]=['Push the T-shaped block onto the T-shaped target.' for i in range(500)]
-                    batch[k]=['Pick up the cube with the right arm and transfer it to the left arm.' for i in range(16)]
-                else:
-                    batch[k] = torch.stack(list(self._queues[k]), dim=1)
-        # batch['observation.images']=batch['observation.images.top']
+        # for k in batch:
+        #     if k in self._queues:
+        #         if k=='task':
+        #             # batch[k]=['Push the T-shaped block onto the T-shaped target.' for i in range(500)]
+        #             batch[k]=['Pick up the cube with the right arm and transfer it to the left arm.' for i in range(16)]
+        #         else:
+        #             batch[k] = torch.stack(list(self._queues[k]), dim=1)
+        batch['observation.state']=batch['observation.state'].unsqueeze(0)
+        batch['observation.images']=batch['observation.images.image'].unsqueeze(0).unsqueeze(0)
         batch_size, n_obs_steps, cam, channels, height, width = batch['observation.images'].shape
         x_reshaped = batch['observation.images'].view(
                     batch_size*n_obs_steps*cam,
@@ -221,10 +224,12 @@ class FlowerPolicy(PreTrainedPolicy):
         EXCLUDE_KEYWORDS = ('_is_pad',)
         for key in batch:
             if not any(kw in key for kw in EXCLUDE_KEYWORDS) and key.startswith(VALID_PREFIXES):
+                if key!='observation.images.rgb.head':
+                    continue
                 image_keys.append(key)
         batch[OBS_IMAGES] = torch.stack([batch[key] for key in image_keys], dim=-4)
         loss = self.flower.compute_loss(batch)
-        
+        print(f"loss: {loss}")
         # no output_dict so returning None
         return loss, None
 
@@ -487,6 +492,24 @@ class FlowerModel(nn.Module):
 
         return missing_keys, unexpected_keys
 
+    def _configure_optimizers(self, optimizer_config: Dict[str, Any]) -> List[Dict[str, Any]]:
+        no_decay = ['bias', 'LayerNorm', 'layernorm', 'ln', 'norm']
+        decay_group = []
+        no_decay_group = []
+        vlm_params = set(p for p in self.vlm.parameters())
+        for name, param in self.named_parameters():
+            if param.requires_grad and param.is_leaf and param not in vlm_params:
+                if any(nd in name.lower() for nd in no_decay):
+                    no_decay_group.append(param)
+                else:
+                    decay_group.append(param)
+        dit_optim_groups = [
+            {"params": decay_group, "weight_decay": optimizer_config["transformer_weight_decay"]},
+            {"params": no_decay_group, "weight_decay": 0.0}
+        ]
+        vlm_optim_params = [p for p in self.vlm.parameters() if p.requires_grad]
+        return dit_optim_groups, vlm_optim_params
+
     # ========= inference  ============
     def conditional_sample(
         self,
@@ -497,13 +520,12 @@ class FlowerModel(nn.Module):
     ) -> Tensor:
         device = get_device_from_parameters(self)
         dtype = get_dtype_from_parameters(self)
-
         # Sample prior.
         z = (
             noise
             if noise is not None
             else torch.randn(
-                size=(batch_size, self.config.horizon, self.config.action_feature.shape[0]),
+                size=(batch_size, self.config.horizon, 16),
                 dtype=dtype,
                 device=device,
                 generator=generator,
@@ -579,7 +601,7 @@ class FlowerModel(nn.Module):
         trajectory = batch[ACTION]
         b = trajectory.shape[0]
         device = trajectory.device
-        default_dtype = trajectory.dtype  # default_dtype = next(self.parameters()).dtype 混合精度？有影响吗？
+        default_dtype = trajectory.dtype
 
         # Sample time based on sampling strategy
         if self.config.sampling_type == "pi_zero":
@@ -621,9 +643,11 @@ class FlowerModel(nn.Module):
         for action_name, action_idx in self.action_space_index.action_spaces.items():
             mask = (action_type == action_idx)
             if mask.any():
+                mask = batch['info']['valid']  # 在这里应用valid，处理错误数据
                 adim = self.action_space_index.get_action_dim(action_idx)
                 mask_expanded = mask.view(-1, 1, 1).expand(-1, trajectory.size(1), adim).to(device)
                 valid_mask[mask, :, :adim] = mask_expanded[mask]
+        
         # Compute loss on valid dimensions only
         diff = (z1 - trajectory) - vtheta
         valid_diff = torch.where(
@@ -641,8 +665,12 @@ class FlowerModel(nn.Module):
                     f"{self.config.do_mask_loss_for_padding=}."
                 )
             in_episode_bound = ~batch["action_is_pad"]
-            loss = loss * in_episode_bound.unsqueeze(-1)
-        return loss.mean()
+            # loss = loss * in_episode_bound.unsqueeze(-1)
+            in_episode_bound = in_episode_bound.unsqueeze(-1).expand(*in_episode_bound.shape, loss.size(-1))
+            valid_mask = valid_mask & in_episode_bound
+            loss = loss * in_episode_bound
+        loss_mean = loss.sum() / (valid_mask.sum().float() + 1e-8)
+        return loss_mean
 
     def encode_observations(self, batch):
         """Encode observations using Florence-2"""
@@ -651,9 +679,6 @@ class FlowerModel(nn.Module):
         default_dtype = get_dtype_from_parameters(self)  # next(self.parameters()).dtype
         
         batch_size, n_obs_steps = batch[OBS_STATE].shape[:2]
-        # horizon, action_dim = batch[ACTION].shape[1:]  # TODO: 后续推理需要额外输入batch[ACTION]，是否需要修改这里的逻辑
-        # horizon = self.config.horizon
-        # action_dim = batch[ACTION].shape[-1] # self.action_space_index.action_dims[self.config.action_space]
         # Extract visual features
         # 根据flower的实现用同一个vlm的encoder分别编码
         images_per_camera = einops.rearrange(batch[OBS_IMAGES], "b s n ... -> n (b s) ...")
@@ -703,10 +728,6 @@ class FlowerModel(nn.Module):
         if self.config.use_proprio:
             proprio = batch['observation.state'].to(device).to(default_dtype)
 
-        # action_type_tensor = torch.ones(batch_size, horizon, action_dim) * \
-        #     self.action_space_index.action_spaces[self.config.action_space]
-        # batch[self.goal_modalities]['action_space_index'],
-        # action_type_tensor = batch_action_index.view(-1, 1, 1).expand(-1, horizon, action_dim)
         return {
             'features': features,
             'frequency_embeds': frequency_embeds,
@@ -813,7 +834,6 @@ class FlowerModel(nn.Module):
             if self.config.vlm_prompt_style == "default":
                 # Original instruction only
                 robot_type = dataset_batch['info']["robot_type"][idx]
-                robot_type = 'lift2'
                 action_index = self.action_space_index.robot_mapping[robot_type]
                 batch_action_index.append(action_index)
                 instruction = generate_policy_prompt(
@@ -858,12 +878,7 @@ class FlowerModel(nn.Module):
 
         # proprio = proprio.squeeze(1).to(device)
         proprio = proprio.mean(dim=1).to(device)
-        # for action_name, action_idx in self.action_space_index.action_spaces.items():
-        #     mask = (action_type == action_idx)
-        #     if mask.any():
-        #         encoded_proprio = self.proprio_encoders[action_name](proprio) # .squeeze(1)
-        
-        encoded_proprio = torch.zeros(batch_size, self.config.dit_dim, device=self.device, dtype=torch.bfloat16)
+        encoded_proprio = torch.zeros(batch_size, self.config.dit_dim, device=self.device, dtype=DEFAULT_DTYPE)
         for action_name, action_idx in self.action_space_index.action_spaces.items():
             mask = (action_type == action_idx)
             if mask.any():
@@ -882,7 +897,7 @@ class FlowerModel(nn.Module):
         #     if mask.any():
         #         encoded = self.action_encoders[action_name](z)
         
-        encoded = torch.zeros(batch_size, z.shape[1], self.config.dit_dim, device=device, dtype=torch.bfloat16)
+        encoded = torch.zeros(batch_size, z.shape[1], self.config.dit_dim, device=device, dtype=DEFAULT_DTYPE)
         valid_dims = torch.zeros_like(z, dtype=default_dtype)
         for action_name, action_idx in self.action_space_index.action_spaces.items():
             mask = (action_type == action_idx)
@@ -905,13 +920,13 @@ class FlowerModel(nn.Module):
 
         batch_size = z.shape[0]
         max_action_dim = self.action_space_index.get_max_action_dim()
-        decoded = torch.zeros(batch_size, z.shape[1], max_action_dim, device=device, dtype=torch.bfloat16)
+        decoded = torch.zeros(batch_size, z.shape[1], max_action_dim, device=device, dtype=DEFAULT_DTYPE)
         for action_name, action_idx in self.action_space_index.action_spaces.items():
             mask = (action_type == action_idx)
             if mask.any():
                 adim = self.action_space_index.get_action_dim(action_idx)
                 pred = self.action_decoders[action_name](z[mask])
-                decoded[mask, :, :adim] = (pred[..., :adim] * valid_dims[mask, :, :adim]).to(torch.bfloat16)
+                decoded[mask, :, :adim] = (pred[..., :adim] * valid_dims[mask, :, :adim]).to(DEFAULT_DTYPE)
 
         return decoded
 
@@ -925,7 +940,7 @@ class FlowerModel(nn.Module):
         num_chunks = 9 if self.config.use_cross_attn else 6
         
         mod_signals = [
-            torch.zeros(batch_size, self.config.dit_dim, device=device, dtype=torch.bfloat16) 
+            torch.zeros(batch_size, self.config.dit_dim, device=device, dtype=DEFAULT_DTYPE) 
             for _ in range(num_chunks)
         ]
         

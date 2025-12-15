@@ -168,14 +168,18 @@ def rollout(
         # TODO: works with SyncVectorEnv but not AsyncVectorEnv
         observation = add_envs_task(env, observation)
 
+        # import torch.nn.functional as F
+        # state = F.pad(observation['observation.robot_state']['joints']['pos'], pad=(0, 1))
         # Apply environment-specific preprocessing (e.g., LiberoProcessorStep for LIBERO)
         observation = env_preprocessor(observation)
+        # observation['observation.state'] = state
+        # observation['info'] = {'robot_type': ['franka'], 'valid': torch.ones(1, dtype=torch.bool)}
 
         observation = preprocessor(observation)
         with torch.inference_mode():
             action = policy.select_action(observation)
         action = postprocessor(action)
-
+        # action = action[:, :8]
         action_transition = {"action": action}
         action_transition = env_postprocessor(action_transition)
         action = action_transition["action"]
@@ -526,11 +530,44 @@ def eval_main(cfg: EvalPipelineConfig):
         "rename_observations_processor": {"rename_map": cfg.rename_map},
     }
 
-    preprocessor, postprocessor = make_pre_post_processors(
-        policy_cfg=cfg.policy,
-        pretrained_path=cfg.policy.pretrained_path,
-        preprocessor_overrides=preprocessor_overrides,
-    )
+    # preprocessor, postprocessor = make_pre_post_processors(
+    #     policy_cfg=cfg.policy,
+    #     pretrained_path=cfg.policy.pretrained_path,
+    #     preprocessor_overrides=preprocessor_overrides,
+    # )
+    # multi task:
+    from lerobot.datasets.transforms import ImageTransforms
+    from lerobot.datasets.lerobot_dataset import MultiLeRobotDataset
+    image_transforms = None
+    dataset = MultiLeRobotDataset(
+            cfg.policy,
+            ["multiple_pick_and_place_part1/bowl"],
+            root=["/mnt/data/daiwanqin/datasets/sim/pick_and_place_tasks/franka/multiple_pick_and_place_part1/bowl"],
+            # TODO(aliberts): add proper support for multi dataset
+            delta_timestamps=None,
+            image_transforms=image_transforms,
+            video_backend="torchcodec",
+        )
+    preprocessor, postprocessor = [], []
+    for sub_idx in range(len(dataset._datasets)):
+        processor_kwargs={}
+        postprocessor_kwargs={}
+        processor_kwargs["dataset_stats"] = dataset._datasets[sub_idx].meta.stats
+        if True:
+            from lerobot.datasets.factory import IMAGENET_STATS
+            for key in dataset._datasets[sub_idx].meta.camera_keys:
+                for stats_type, stats in IMAGENET_STATS.items():
+                    dataset._datasets[sub_idx].meta.stats[key][stats_type] = torch.tensor(stats, dtype=torch.float32)
+
+        pre, post = make_pre_post_processors(
+            policy_cfg=cfg.policy,
+            pretrained_path=None,
+            **processor_kwargs,
+            **postprocessor_kwargs,
+        )
+        preprocessor.append(pre)
+        postprocessor.append(post)
+    preprocessor, postprocessor = preprocessor[0], postprocessor[0]
 
     # Create environment-specific preprocessor and postprocessor (e.g., for LIBERO environments)
     env_preprocessor, env_postprocessor = make_env_pre_post_processors(env_cfg=cfg.env)
