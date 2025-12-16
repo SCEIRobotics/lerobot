@@ -172,12 +172,6 @@ def update_policy(
     # Step through pytorch scheduler at every batch instead of epoch
     if lr_scheduler is not None:
         lr_scheduler.step()
-    torch.cuda.empty_cache()
-    torch.cuda.empty_cache()
-    torch.cuda.empty_cache()
-    gc.collect()
-    gc.collect()
-    gc.collect()
     # Update internal buffers if policy has update method
     if has_method(accelerator.unwrap_model(policy, keep_fp32_wrapper=True), "update"):
         accelerator.unwrap_model(policy, keep_fp32_wrapper=True).update()
@@ -290,10 +284,11 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
 
     if is_main_process:
         logging.info("Creating policy")
-   
+    
+    ds_metas = [ds.meta for ds in datasets]
     policy = make_policy(
         cfg=cfg.policy,
-        ds_meta=None,
+        ds_meta=ds_metas,
         rename_map=cfg.rename_map,
         )
 
@@ -371,6 +366,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             )
         dataloaders_.append(dataloader)
     else:
+        from lerobot.datasets.streaming_dataset import FlowerDataCollator
         for sub_idx in range(len(datasets)):
             dataloader = torch.utils.data.DataLoader(
                 datasets[sub_idx],
@@ -378,6 +374,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                 batch_size=cfg.batch_size,
                 shuffle=shuffle and not cfg.dataset.streaming,
                 sampler=sampler,
+                collate_fn=FlowerDataCollator(),
                 pin_memory=device.type == "cuda",
                 drop_last=True,
                 prefetch_factor=2 if cfg.num_workers > 0 else None,
@@ -387,13 +384,10 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     # Prepare everything with accelerator
     accelerator.wait_for_everyone()
     # accelerator暂时不支持non-tensor的IterableDataset:
-    if not cfg.dataset.streaming:
-        dataloaders = []
-        for dataloader in dataloaders_:
-            dataloader = accelerator.prepare(dataloader)
-            dataloaders.append(dataloader)
-    else:
-        dataloaders = dataloaders_
+    dataloaders = []
+    for dataloader in dataloaders_:
+        dataloader = accelerator.prepare(dataloader)
+        dataloaders.append(dataloader)
     policy, optimizer, lr_scheduler = accelerator.prepare(
         policy, optimizer, lr_scheduler
     )
@@ -425,12 +419,13 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
 
     for batch_idx in range(step, cfg.steps):
         start_time = time.perf_counter()
+        st = time.time()
         dataloader_idx = batch_idx % len(dl_iters)
-        batch = next(dl_iters[dataloader_idx])   
-        batch = preprocessor[dataloader_idx](batch)
+        batch = next(dl_iters[dataloader_idx])  
+        batch = preprocessor[dataloader_idx](batch) 
         batch = process_batch(batch, requires_padding=cfg.dataset.requires_padding)
         train_tracker.dataloading_s = time.perf_counter() - start_time
-
+        pt = time.time()
         train_tracker, output_dict = update_policy(
             train_tracker,
             policy,
@@ -440,7 +435,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             accelerator=accelerator,
             lr_scheduler=lr_scheduler,
         )
-
+        ut = time.time()
+        print(f"dataloading_s: {pt-st:.3f}, update_s: {ut - pt:.3f}")
         # Note: eval and checkpoint happens *after* the `step`th training update has completed, so we
         # increment `step` here.
         step += 1
@@ -457,6 +453,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                     wandb_log_dict.update(output_dict)
                 wandb_logger.log_dict(wandb_log_dict, step)
             train_tracker.reset_averages()
+            torch.cuda.empty_cache()
+            gc.collect()
 
         if cfg.save_checkpoint and is_saving_step:
             if is_main_process:
@@ -469,8 +467,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                     policy=accelerator.unwrap_model(policy),
                     optimizer=optimizer,
                     scheduler=lr_scheduler,
-                    preprocessor=preprocessor if not isinstance(preprocessor, list) else None,
-                    postprocessor=postprocessor if not isinstance(postprocessor, list) else None,
+                    preprocessor=preprocessor if not isinstance(preprocessor, list) else preprocessor[0],
+                    postprocessor=postprocessor if not isinstance(postprocessor, list) else postprocessor[0],
                 )
                 update_last_checkpoint(checkpoint_dir)
                 if wandb_logger:

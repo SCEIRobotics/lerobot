@@ -61,7 +61,7 @@ from lerobot.policies.flower.transformers_flower import (
     stateless_norm
 )
 from torchvision.utils import save_image
-DEFAULT_DTYPE = torch.bfloat16
+DEFAULT_DTYPE = torch.float32
 # torch.bfloat16
 # torch.float32
 
@@ -643,7 +643,7 @@ class FlowerModel(nn.Module):
         for action_name, action_idx in self.action_space_index.action_spaces.items():
             mask = (action_type == action_idx)
             if mask.any():
-                mask = batch['valid']  # 在这里应用valid，处理错误数据
+                mask = batch['info']['valid']  # 在这里应用valid，处理错误数据
                 adim = self.action_space_index.get_action_dim(action_idx)
                 mask_expanded = mask.view(-1, 1, 1).expand(-1, trajectory.size(1), adim).to(device)
                 valid_mask[mask, :, :adim] = mask_expanded[mask]
@@ -691,11 +691,8 @@ class FlowerModel(nn.Module):
         
         # Get text embeddings
         # Get text embeddings once to reuse
-        # constructed_prompts, batch_action_index = self.construct_prompts(batch)
-        # text_embeds, txt_attention_mask = self._get_text_embeddings(constructed_prompts, device)
-        batch_action_index = batch['action_index'].to(device)
-        text_embeds = self._get_text_embeddings_new(batch['text_input_ids'], device)
-        txt_attention_mask = batch['text_attention_mask'].to(device)
+        constructed_prompts, batch_action_index = self.construct_prompts(batch)
+        text_embeds, txt_attention_mask = self._get_text_embeddings(constructed_prompts, device)
         # Add task prompt and aggregation tokens
         task_prompt = self.prompt_embeds.expand(batch_size, -1, -1)
         
@@ -855,11 +852,18 @@ class FlowerModel(nn.Module):
         batch_action_index = torch.tensor(batch_action_index)
         return text_prompts, batch_action_index
 
-    def _get_text_embeddings_new(self, text_inputs, device):
+    def _get_text_embeddings(self, text, device):
         """Get text embeddings to use with VLM"""
-        text_inputs = text_inputs.to(device)
-        text_embeds = self.vlm.get_input_embeddings()(text_inputs)
-        return text_embeds
+        text_inputs = self.tokenizer(
+            text,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=77
+        ).to(device)
+        text_embeds = self.vlm.get_input_embeddings()(text_inputs["input_ids"])
+        txt_attention_mask = text_inputs.data["attention_mask"]
+        return text_embeds, txt_attention_mask 
     
     def encode_proprio(self, proprio: torch.Tensor, action_type: torch.Tensor, output_shape) -> torch.Tensor:
         """

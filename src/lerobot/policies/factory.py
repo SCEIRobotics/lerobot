@@ -383,7 +383,7 @@ def make_pre_post_processors(
 
 def make_policy(
     cfg: PreTrainedConfig,
-    ds_meta: LeRobotDatasetMetadata | None = None,
+    ds_meta: LeRobotDatasetMetadata | list[LeRobotDatasetMetadata] | None = None,
     env_cfg: EnvConfig | None = None,
     rename_map: dict[str, str] | None = None,
 ) -> PreTrainedPolicy:
@@ -433,18 +433,22 @@ def make_policy(
 
     kwargs = {}
     if ds_meta is not None:
-        features = dataset_to_policy_features(ds_meta.features)
+        if isinstance(ds_meta, LeRobotDatasetMetadata):
+            features = dataset_to_policy_features(ds_meta.features)
+        else:
+            features = {}
+            for sub_meta in ds_meta:
+                features.update(dataset_to_policy_features(sub_meta.features))  # key相同即使shape不同也会被覆盖
     else:
-        if not cfg.pretrained_path and env_cfg is not None:  
+        if not cfg.pretrained_path:
             logging.warning(
                 "You are instantiating a policy from scratch and its features are parsed from an environment "
                 "rather than a dataset. Normalization modules inside the policy will have infinite values "
                 "by default without stats from a dataset."
-            ) 
-            features = env_to_policy_features(env_cfg)
-        else:
-            logging.warning("no features provided ...") 
-            features = {}
+            )
+        if env_cfg is None:
+            raise ValueError("env_cfg cannot be None when ds_meta is not provided")
+        features = env_to_policy_features(env_cfg)
 
     cfg.output_features = {key: ft for key, ft in features.items() if ft.type is FeatureType.ACTION}
     if not cfg.input_features:

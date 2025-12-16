@@ -1,5 +1,5 @@
 #!/bin/bash
-export CUDA_VISIBLE_DEVICES=0,1,4,5,6,7
+export CUDA_VISIBLE_DEVICES=4,5,6,7
 
 # export MUJOCO_GL=egl # 强制 MuJoCo 使用 EGL 渲染（关键）
 # export PYOPENGL_PLATFORM=egl # 禁用 GLFW 图形窗口（避免初始化错误）
@@ -14,8 +14,8 @@ TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
     # /mnt/data/daiwanqin/datasets/sim/basic_tasks
     # /mnt/data/daiwanqin/datasets/sim/articulation_tasks
     # /mnt/data/daiwanqin/datasets/sim/pick_and_place_tasks/franka/  multiple_pick_and_place_part1/basket
-# accelerate launch --multi_gpu --num_processes=2 \
-python  ./src/lerobot/scripts/lerobot_train_multi.py \
+accelerate launch --multi_gpu --num_processes=4 \
+ ./src/lerobot/scripts/lerobot_train_multi.py \
     --dataset.root=/mnt/data_ssd/share/datasets/InternData-A1 \
     --dataset.repo_id=InternData-A1/test \
     --dataset.streaming=true \
@@ -43,5 +43,3 @@ python  ./src/lerobot/scripts/lerobot_train_multi.py \
 # 1. repo_id字符数过长可能造成wandb报错，目前注释掉wandb.init的tag项
 # 2. 设置wandb.disable_artifact=true，禁用wandb的artifact功能，避免占用wandb的存储空间
 # 3. flower目前使用的vlm只支持长宽相同的图像输入
-# 5. 暂时注释掉了部分检查代码，
-# 6. 默认使用所有数据集，使用multi-dataset

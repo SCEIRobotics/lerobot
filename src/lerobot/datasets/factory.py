@@ -122,19 +122,19 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
             )
     else:
         if not cfg.dataset.streaming:
-            dataset = MultiLeRobotDataset(
-                cfg.policy,
-                cfg.dataset.repo_id,
-                root=cfg.dataset.root,
-                # TODO(aliberts): add proper support for multi dataset
-                # delta_timestamps=delta_timestamps,
-                image_transforms=image_transforms,
-                video_backend=cfg.dataset.video_backend,
-            )
-            logging.info(
-                "Multiple datasets were provided. Applied the following index mapping to the provided datasets: "
-                f"{pformat(dataset.repo_id_to_index, indent=2)}"
-            )
+            dataset = []
+            for sub_idx, (repo_id, root) in enumerate(zip(cfg.dataset.repo_id, cfg.dataset.root)):
+                ds = LeRobotDataset(
+                    cfg.policy,
+                    cfg.dataset.repo_id,
+                    root=cfg.dataset.root,
+                    episodes=cfg.dataset.episodes,
+                    # delta_timestamps=delta_timestamps,
+                    image_transforms=image_transforms,
+                    revision=cfg.dataset.revision,
+                    video_backend=cfg.dataset.video_backend,
+                )
+                dataset.append(ds)
         else:
             dataset = []
             for sub_idx, (repo_id, root) in enumerate(zip(cfg.dataset.repo_id, cfg.dataset.root)):
@@ -146,7 +146,7 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
                     # delta_timestamps=delta_timestamps,
                     image_transforms=image_transforms,
                     revision=cfg.dataset.revision,
-                    # max_num_shards=cfg.num_workers,
+                    max_num_shards=cfg.num_workers,
                     sub_id=sub_idx,
                 )
                 dataset.append(ds)

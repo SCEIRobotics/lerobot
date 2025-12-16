@@ -731,8 +731,8 @@ def dataset_to_policy_features(features: dict[str, dict]) -> dict[str, PolicyFea
         elif key.startswith(ACTION):
             type = FeatureType.ACTION
         # 适配a1数据
-        elif key.startswith('state'):
-            type = FeatureType.STATE
+        # elif key.startswith('state'):
+        #     type = FeatureType.STATE
         # elif key.startswith('action'):
         #     type = FeatureType.ACTION
         else:
