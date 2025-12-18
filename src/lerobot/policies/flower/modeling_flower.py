@@ -61,7 +61,7 @@ from lerobot.policies.flower.transformers_flower import (
     stateless_norm
 )
 from torchvision.utils import save_image
-DEFAULT_DTYPE = torch.bfloat16
+DEFAULT_DTYPE = torch.float32
 # torch.bfloat16
 # torch.float32
 
@@ -540,7 +540,7 @@ class FlowerModel(nn.Module):
             t_tensor = torch.full((batch_size,), t_val, device=device)
 
             # Predict velocity field
-            vc = self.dit_forward(z, t_tensor, cond)
+            vc, _ = self.dit_forward(z, t_tensor, cond)
             z = z - dt_tensor * vc
         
         sample = z.clamp(-1, 1)
@@ -636,7 +636,7 @@ class FlowerModel(nn.Module):
         zt = (1 - texp) * trajectory + texp * z1
 
         # Forward pass
-        vtheta = self.dit_forward(zt, t, cond)
+        vtheta, _ = self.dit_forward(zt, t, cond)
         
         # valid_mask
         valid_mask = torch.zeros_like(trajectory, dtype=torch.bool)
@@ -802,7 +802,7 @@ class FlowerModel(nn.Module):
             )
             
         # Decode and return
-        return self.decode_actions(cx, action_type, valid_dims)
+        return self.decode_actions(cx, action_type, valid_dims), cx
 
     def _create_prompt_embed(self, prompt_text):
         """Create embeddings for prompt tokens"""
