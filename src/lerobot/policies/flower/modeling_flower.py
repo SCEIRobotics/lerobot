@@ -61,7 +61,7 @@ from lerobot.policies.flower.transformers_flower import (
     stateless_norm
 )
 from torchvision.utils import save_image
-DEFAULT_DTYPE = torch.bfloat16
+DEFAULT_DTYPE = torch.float32
 # torch.bfloat16
 # torch.float32
 
