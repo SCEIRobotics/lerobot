@@ -309,7 +309,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
 
         pre, post = make_pre_post_processors(
             policy_cfg=cfg.policy,
-            pretrained_path=cfg.policy.pretrained_path,
+            pretrained_path=None,
             **processor_kwargs,
             **postprocessor_kwargs,
         )
@@ -354,17 +354,18 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         sampler = None
     dataloaders_ = []
     if not cfg.dataset.streaming:
-        dataloader = torch.utils.data.DataLoader(
-            datasets,
-            num_workers=cfg.num_workers,
-            batch_size=cfg.batch_size,
-            shuffle=shuffle and not cfg.dataset.streaming,
-            sampler=sampler,
-            pin_memory=device.type == "cuda",
-            drop_last=True,
-            prefetch_factor=2 if cfg.num_workers > 0 else None,
-            )
-        dataloaders_.append(dataloader)
+        for sub_idx in range(len(datasets)):
+            dataloader = torch.utils.data.DataLoader(
+                datasets,
+                num_workers=cfg.num_workers,
+                batch_size=cfg.batch_size,
+                shuffle=shuffle and not cfg.dataset.streaming,
+                sampler=sampler,
+                pin_memory=device.type == "cuda",
+                drop_last=True,
+                prefetch_factor=2 if cfg.num_workers > 0 else None,
+                )
+            dataloaders_.append(dataloader)
     else:
         from lerobot.datasets.streaming_dataset import FlowerDataCollator
         for sub_idx in range(len(datasets)):

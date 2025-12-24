@@ -110,16 +110,13 @@ def update_policy(
     # Optimizer step
     with lock if lock is not None else nullcontext():
         optimizer.step()
-    
-    # torch.cuda.empty_cache()
-    optimizer.zero_grad()  # set_to_none=True
+
+    optimizer.zero_grad()
 
     # Step through pytorch scheduler at every batch instead of epoch
     if lr_scheduler is not None:
         lr_scheduler.step()
-    # gc.collect()
-    # gc.collect()
-    # gc.collect()
+    
     # Update internal buffers if policy has update method
     if has_method(accelerator.unwrap_model(policy, keep_fp32_wrapper=True), "update"):
         accelerator.unwrap_model(policy, keep_fp32_wrapper=True).update()
@@ -149,6 +146,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         accelerator: Optional Accelerator instance. If None, one will be created automatically.
     """
     cfg.validate()
+
     # Create Accelerator if not provided
     # It will automatically detect if running in distributed mode or single-process mode
     # We set step_scheduler_with_optimizer=False to prevent accelerate from adjusting the lr_scheduler steps based on the num_processes
@@ -343,9 +341,9 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     if is_main_process:
         logging.info("Start offline training on a fixed dataset")
 
-    for batch_idx in range(step, cfg.steps):
+    for _ in range(step, cfg.steps):
         start_time = time.perf_counter()
-        batch= next(dl_iter)
+        batch = next(dl_iter)
         batch = preprocessor(batch)
         train_tracker.dataloading_s = time.perf_counter() - start_time
 

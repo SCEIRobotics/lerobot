@@ -68,7 +68,7 @@ class RobotKinematics:
 
         # Update joint positions in placo robot
         for i, joint_name in enumerate(self.joint_names):
-            self.robot.set_joint(joint_name, joint_pos_rad[i][0])
+            self.robot.set_joint(joint_name, joint_pos_rad[i])
 
         # Update kinematics
         self.robot.update_kinematics()

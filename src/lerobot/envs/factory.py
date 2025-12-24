@@ -72,25 +72,7 @@ def make_env_pre_post_processors(
     # For LIBERO environments, add the LiberoProcessorStep to preprocessor
     if isinstance(env_cfg, LiberoEnv) or "libero" in env_cfg.type:
         preprocessor_steps.append(LiberoProcessorStep())
-        from lerobot.robots.so100_follower.robot_kinematic_processor import ForwardKinematicsJointsToEEAction
-        from lerobot.model.kinematics import RobotKinematics
-        postprocessor_steps.append(
-            ForwardKinematicsJointsToEEAction(
-                kinematics=RobotKinematics(
-                    urdf_path='./envs/franka_description/panda.urdf',
-                    target_frame_name="panda_link8"
-                ),
-                motor_names=[
-                    "joint_1",
-                    "joint_2",
-                    "joint_3",
-                    "joint_4",
-                    "joint_5",
-                    "joint_6",
-                    "joint_7",
-                ],
-            )
-            )
+    
     preprocessor = PolicyProcessorPipeline(steps=preprocessor_steps)
     postprocessor = PolicyProcessorPipeline(steps=postprocessor_steps)
 

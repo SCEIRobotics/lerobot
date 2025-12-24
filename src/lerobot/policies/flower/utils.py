@@ -77,16 +77,32 @@ class ActionIndex:
 
     def __init__(self):
         # Define action spaces with their dimensions
+        # self.action_spaces = {
+        #     'joint_single': 0,  # Single arm joint position control (type 0)
+        #     'eef_delta': 1,    # Single arm end-effector velocity (type 1) 
+        #     'bimanual_nav': 2, # Bimanual with navigation (type 2),
+        #     # 'nav': 3,         # Navigation (type 3)
+        # }
+        
+        # self.action_dims = {
+        #     'joint_single': 8,  # Single arm joint position control (type 0)
+        #     'eef_delta': 7,    # Single arm end-effector velocity (type 1) 
+        #     'bimanual_nav': 16, # Bimanual with navigation (type 2),
+        #     # 'nav': 2,         # Navigation (type 3)
+        # }
+
         self.action_spaces = {
             'pos-1_arm-8_dim': 0, 
             'pos-2_arm-14_dim': 1,
             'pos-2_arm-16_dim': 2,
+            # 'eef_delta': 3,
         }
         
         self.action_dims = {
             'pos-1_arm-8_dim': 8, 
             'pos-2_arm-14_dim': 14,
             'pos-2_arm-16_dim': 16,
+            # 'eef_delta': 7,
         }
 
         self.robot_arm = {

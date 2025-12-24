@@ -243,13 +243,7 @@ class FlowerModel(nn.Module):
         self.device = config.device
         
         # Initialize configurations: 已移到configuration_flower
-        # Set task prompt format
-        # self.format_instruction = functools.partial(
-        #     generate_policy_prompt,
-        #     robot_name=config.robot_name,
-        #     action_space=config.action_space,
-        #     num_arms=config.num_arms,
-        #     prompt_style='minimal')
+        # Set task prompt format: 已移到stream dataset 处理
         
         # Setup VLM and core components
         self._setup_vlm(
@@ -540,7 +534,7 @@ class FlowerModel(nn.Module):
             t_tensor = torch.full((batch_size,), t_val, device=device)
 
             # Predict velocity field
-            vc = self.dit_forward(z, t_tensor, cond)
+            vc, _ = self.dit_forward(z, t_tensor, cond)
             z = z - dt_tensor * vc
         
         sample = z.clamp(-1, 1)
@@ -636,7 +630,7 @@ class FlowerModel(nn.Module):
         zt = (1 - texp) * trajectory + texp * z1
 
         # Forward pass
-        vtheta = self.dit_forward(zt, t, cond)
+        vtheta, _ = self.dit_forward(zt, t, cond)
         
         # valid_mask
         valid_mask = torch.zeros_like(trajectory, dtype=torch.bool)
@@ -792,6 +786,9 @@ class FlowerModel(nn.Module):
             global_adaln = self.action_specific_adaln(global_cond, action_type)
 
         # Process through DiT blocks
+        # print(next(self.vlm.parameters()).device)
+        # print(next(self.dit.parameters()).device)
+        # import pdb; pdb.set_trace()
         for layer in self.dit:
             cx = layer(
                 cx, 
@@ -802,7 +799,7 @@ class FlowerModel(nn.Module):
             )
             
         # Decode and return
-        return self.decode_actions(cx, action_type, valid_dims)
+        return self.decode_actions(cx, action_type, valid_dims), cx
 
     def _create_prompt_embed(self, prompt_text):
         """Create embeddings for prompt tokens"""
@@ -874,7 +871,7 @@ class FlowerModel(nn.Module):
 
         # proprio = proprio.squeeze(1).to(device)
         proprio = proprio.mean(dim=1).to(device)
-        encoded_proprio = torch.zeros(batch_size, self.config.dit_dim, device=self.device, dtype=DEFAULT_DTYPE)
+        encoded_proprio = torch.zeros(batch_size, self.config.dit_dim, device=device, dtype=DEFAULT_DTYPE)
         for action_name, action_idx in self.action_space_index.action_spaces.items():
             mask = (action_type == action_idx)
             if mask.any():
@@ -956,3 +953,13 @@ class FlowerModel(nn.Module):
                 for i, signal in enumerate(action_mod):
                     mod_signals[i][mask] = signal
         return mod_signals
+
+
+if __name__ == "__main__":
+    from lerobot.policies.flower.configuration_flower import FlowerConfig
+    libero_weights = "/mnt/data/daiwanqin/models/flower_train/22-48-39/seed_42/saved_models/epoch=49_eval_lh/avg_seq_len=0.93.ckpt"
+    config = FlowerConfig()
+    config.use_proprio = False
+    model = FlowerModel(config)
+    model._load_pretrained_weights(libero_weights)
+

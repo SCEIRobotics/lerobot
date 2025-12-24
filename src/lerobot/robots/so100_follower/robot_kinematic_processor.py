@@ -16,7 +16,7 @@
 
 from dataclasses import dataclass, field
 from typing import Any
-import torch
+
 import numpy as np
 
 from lerobot.configs.types import FeatureType, PipelineFeatureType, PolicyFeature
@@ -472,10 +472,7 @@ class ForwardKinematicsJointsToEEAction(RobotActionProcessorStep):
     motor_names: list[str]
 
     def action(self, action: RobotAction) -> RobotAction:
-        joints = compute_forward_kinematics_joints_to_ee(action, self.kinematics, self.motor_names)
-        joints = [joints['ee.x'], joints['ee.y'], joints['ee.z'], joints['ee.wx'], joints['ee.wy'], joints['ee.wz'], joints['ee.gripper_pos']]
-        joints = torch.tensor(joints, dtype=float).unsqueeze(0)
-        return joints
+        return compute_forward_kinematics_joints_to_ee(action, self.kinematics, self.motor_names)
 
     def transform_features(
         self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
