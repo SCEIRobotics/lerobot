@@ -165,20 +165,32 @@ def update_policy(
 
     # Optimizer step
     with lock if lock is not None else nullcontext():
-        optimizer.step()
-    
-    optimizer.zero_grad()  # set_to_none=True
+        if isinstance(optimizer, dict):
+            for opt in optimizer.values():
+                opt.step()
+        else:
+            optimizer.step()
+
+    if isinstance(optimizer, dict):
+        for opt in optimizer.values():
+            opt.zero_grad(set_to_none=True)
+    else:
+        optimizer.zero_grad(set_to_none=True)
 
     # Step through pytorch scheduler at every batch instead of epoch
     if lr_scheduler is not None:
-        lr_scheduler.step()
+        if isinstance(lr_scheduler, dict):
+            for sched in lr_scheduler.values():
+                sched.step()
+        else:
+            lr_scheduler.step() 
     # Update internal buffers if policy has update method
     if has_method(accelerator.unwrap_model(policy, keep_fp32_wrapper=True), "update"):
         accelerator.unwrap_model(policy, keep_fp32_wrapper=True).update()
 
     train_metrics.loss = loss.item()
     train_metrics.grad_norm = grad_norm.item()
-    train_metrics.lr = optimizer.param_groups[0]["lr"]
+    train_metrics.lr = optimizer['dit'].param_groups[0]["lr"] if isinstance(optimizer, dict) else optimizer.param_groups[0]["lr"]
     train_metrics.update_s = time.perf_counter() - start_time
     return train_metrics, output_dict
 

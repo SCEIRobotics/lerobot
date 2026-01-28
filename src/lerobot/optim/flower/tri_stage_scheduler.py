@@ -23,10 +23,12 @@
 import math
 from dataclasses import dataclass, field
 from typing import Optional
+from functools import partial
 
 import torch
 from omegaconf import DictConfig
 from torch.optim import Optimizer
+from torch.optim.lr_scheduler import LambdaLR
 
 from . import register_scheduler, LearningRateSchedulerConfigs
 from .lr_scheduler import LearningRateScheduler
@@ -47,6 +49,101 @@ class TriStageLRSchedulerConfigs(LearningRateSchedulerConfigs):
     )
     total_steps: int = field(default=400000, metadata={"help": "Total training steps."})
 
+@register_scheduler("tri_stage_pt", dataclass=TriStageLRSchedulerConfigs)
+class TriStageLRSchedulerPt(LambdaLR):
+    """
+    Tri-Stage Learning Rate Scheduler implemented using LambdaLR interface.
+    
+    The scheduler has three stages:
+    1. Warmup: Linear increase from init_lr to peak_lr
+    2. Hold: Maintain peak_lr
+    3. Decay: Cosine decay from peak_lr to final_lr
+    
+    Args:
+        optimizer (Optimizer): The optimizer to adjust learning rate for
+        total_steps (int): Total number of training steps
+        phase_ratio (str): String representation of list containing ratios for each phase (must sum to 1)
+        init_lr_scale (float): Initial learning rate scale factor
+        final_lr_scale (float): Final learning rate scale factor
+        last_epoch (int, optional): The index of last epoch. Defaults to -1.
+    """
+    def __init__(
+        self,
+        optimizer: Optimizer,
+        total_steps: int,
+        phase_ratio: str,
+        init_lr_scale: float,
+        final_lr_scale: float,
+        last_epoch: int = -1
+    ):
+        self.total_steps = total_steps
+        self.phase_ratio = eval(phase_ratio)
+        
+        # Calculate steps for each phase
+        self.warmup_steps = int(total_steps * self.phase_ratio[0])
+        self.hold_steps = int(total_steps * self.phase_ratio[1])
+        self.decay_steps = int(total_steps * self.phase_ratio[2])
+        
+        # Store scaling factors
+        self.init_lr_scale = init_lr_scale
+        self.final_lr_scale = final_lr_scale
+        
+        # Create lambda function for scheduler
+        lr_lambda = partial(
+            self._get_tri_stage_lambda,
+            warmup_steps=self.warmup_steps,
+            hold_steps=self.hold_steps,
+            decay_steps=self.decay_steps,
+            init_lr_scale=init_lr_scale,
+            final_lr_scale=final_lr_scale
+        )
+        
+        super().__init__(optimizer, lr_lambda, last_epoch)
+
+    @staticmethod
+    def _get_tri_stage_lambda(
+        current_step: int,
+        *,
+        warmup_steps: int,
+        hold_steps: int,
+        decay_steps: int,
+        init_lr_scale: float,
+        final_lr_scale: float
+    ) -> float:
+        """
+        Calculate the learning rate multiplier for the current step.
+        """
+        # Determine current stage
+        if current_step < warmup_steps:
+            # Warmup stage: linear increase from init_lr_scale to 1.0
+            return init_lr_scale + (1.0 - init_lr_scale) * (current_step / max(1, warmup_steps))
+        
+        current_step = current_step - warmup_steps
+        if current_step < hold_steps:
+            # Hold stage: maintain peak learning rate
+            return 1.0
+        
+        current_step = current_step - hold_steps
+        if current_step < decay_steps:
+            # Decay stage: cosine decay from 1.0 to final_lr_scale
+            progress = current_step / max(1, decay_steps)
+            return final_lr_scale + 0.5 * (1.0 - final_lr_scale) * (1.0 + math.cos(progress * math.pi))
+        
+        # After decay: maintain final learning rate
+        return final_lr_scale
+
+    @classmethod
+    def from_config(cls, optimizer: Optimizer, configs: DictConfig) -> 'TriStageLRScheduler':
+        """
+        Create scheduler from config dictionary for backward compatibility.
+        """
+        return cls(
+            optimizer=optimizer,
+            total_steps=configs.total_steps,
+            phase_ratio=configs.phase_ratio,
+            init_lr_scale=configs.init_lr_scale,
+            final_lr_scale=configs.final_lr_scale
+        )
 
 @register_scheduler("tri_stage", dataclass=TriStageLRSchedulerConfigs)
 class TriStageLRScheduler(LearningRateScheduler):

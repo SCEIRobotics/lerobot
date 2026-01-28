@@ -19,6 +19,7 @@ import math
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from accelerate import optimizer
 import draccus
 from omegaconf import OmegaConf
 from torch.optim import Optimizer
@@ -55,7 +56,7 @@ class DiffuserSchedulerConfig(LRSchedulerConfig):
         return get_scheduler(**kwargs)
 
 
-from lerobot.optim.flower.tri_stage_scheduler import TriStageLRScheduler
+from lerobot.optim.flower.tri_stage_scheduler import TriStageLRScheduler, TriStageLRSchedulerPt
 from dataclasses import dataclass, field
 from typing import Any, Optional, Dict
 @LRSchedulerConfig.register_subclass("TriStage")
@@ -63,6 +64,7 @@ from typing import Any, Optional, Dict
 class TriStageLRSchedulerConfig(LRSchedulerConfig):
     configs: Dict[str, Any] = field(default_factory=dict)
     num_warmup_steps: int | None = None
+    
     def build(self, optimizer, num_training_steps):
         configs = OmegaConf.create(self.configs)
         scheduler = TriStageLRScheduler(
@@ -71,7 +73,37 @@ class TriStageLRSchedulerConfig(LRSchedulerConfig):
         )
         return scheduler
 
+@LRSchedulerConfig.register_subclass("MultiTriStagePt")
+@dataclass
+class MultiTriStageLRSchedulerPtConfig(LRSchedulerConfig):
+    # configs: Dict[str, Any] = field(default_factory=dict)
+    num_warmup_steps: int | None = None
+    
+    init_lr_scale=0.1
+    final_lr_scale=0.5
+    total_steps=50000  
+    phase_ratio="(0.05, 0.1, 0.85)"
 
+    scheduler_groups: dict[str, dict[str, Any]] = field(default_factory=dict)
+    
+    def build(self, optimizers, num_training_steps):
+        schedulers = {} 
+        for name, optimizer in optimizers.items():
+            # Get group-specific hyperparameters or use defaults
+            group_config = self.scheduler_groups.get(name, {})
+
+            # Create scheduler with merged parameters (defaults + group-specific)
+ 
+            scheduler_kwargs = {
+                "total_steps": num_training_steps or group_config.get("total_steps", self.total_steps),
+                "phase_ratio": group_config.get("phase_ratio", self.phase_ratio),
+                "init_lr_scale": group_config.get("init_lr_scale", self.init_lr_scale),
+                "final_lr_scale": group_config.get("final_lr_scale", self.final_lr_scale),
+            }
+
+            schedulers[name] = TriStageLRSchedulerPt(optimizer, **scheduler_kwargs)
+        return schedulers
+ 
 @LRSchedulerConfig.register_subclass("vqbet")
 @dataclass
 class VQBeTSchedulerConfig(LRSchedulerConfig):
