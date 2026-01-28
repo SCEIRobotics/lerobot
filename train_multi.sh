@@ -1,5 +1,5 @@
 #!/bin/bash
-export CUDA_VISIBLE_DEVICES=0,1,2,3
+export CUDA_VISIBLE_DEVICES=4,7
 
 # export MUJOCO_GL=egl # 强制 MuJoCo 使用 EGL 渲染（关键）
 # export PYOPENGL_PLATFORM=egl # 禁用 GLFW 图形窗口（避免初始化错误）
@@ -14,7 +14,10 @@ TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
     # /mnt/data/daiwanqin/datasets/sim/basic_tasks
     # /mnt/data/daiwanqin/datasets/sim/articulation_tasks
     # /mnt/data/daiwanqin/datasets/sim/pick_and_place_tasks/franka/  multiple_pick_and_place_part1/basket
-accelerate launch --multi_gpu --num_processes=4 \
+
+# pretrain path
+# /mnt/data/daiwanqin/gitlab/lerobot/outputs/train/train-a1-20251215_231919/checkpoints/last/pretrained_model
+accelerate launch --multi_gpu --num_processes=2 \
  ./src/lerobot/scripts/lerobot_train_multi.py \
     --dataset.root=/mnt/data_ssd/share/datasets/InternData-A1 \
     --dataset.repo_id=InternData-A1/test \
@@ -26,15 +29,15 @@ accelerate launch --multi_gpu --num_processes=4 \
     --policy.n_action_steps=60 \
     --policy.push_to_hub=false \
     --policy.device=cuda \
-    --policy.pretrained_path=/mnt/data/daiwanqin/gitlab/lerobot/outputs/train/train-a1-20251215_231919/checkpoints/last/pretrained_model \
-    --resume=true \
+    --policy.pretrained_path=None \
+    --resume=false \
     --config_path=/mnt/data/daiwanqin/gitlab/lerobot/outputs/train/train-a1-20251215_231919/checkpoints/last/pretrained_model/train_config.json \
     --batch_size=32 \
     --num_workers=4 \
     --steps=3000000 \
     --save_freq=10000 \
     --output_dir=outputs/train/train-a1-${TIMESTAMP} \
-    --wandb.enable=true \
+    --wandb.enable=false \
     --wandb.disable_artifact=true \
     --wandb.mode=offline \
     # --eval_freq=10000 \

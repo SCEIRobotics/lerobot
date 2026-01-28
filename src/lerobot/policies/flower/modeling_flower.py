@@ -98,22 +98,9 @@ class FlowerPolicy(PreTrainedPolicy):
     def get_optim_params(self) -> dict:
         # return self.flower.parameters()
         """Get parameter groups for optimizer"""
-        no_decay = ['bias', 'LayerNorm', 'layernorm', 'ln', 'norm']
-        decay_group = []
-        no_decay_group = []
-
-        # Collect all parameters, excluding VLM if frozen
-        for name, param in self.flower.named_parameters():
-            if param.requires_grad:
-                if any(nd in name.lower() for nd in no_decay):
-                    no_decay_group.append(param)
-                else:
-                    decay_group.append(param)
-
-        return [
-            {"params": decay_group, "weight_decay": self.config.optimizer_weight_decay},
-            {"params": no_decay_group, "weight_decay": 0.0}
-        ]
+        dit_optim_groups, vlm_optim_params = self.flower._configure_optimizers(self.config)
+        return {"dit": dit_optim_groups, "vlm": vlm_optim_params}
+        
 
     def reset(self):
         """Clear observation and action queues. Should be called on `env.reset()`"""
@@ -498,7 +485,7 @@ class FlowerModel(nn.Module):
                 else:
                     decay_group.append(param)
         dit_optim_groups = [
-            {"params": decay_group, "weight_decay": optimizer_config["transformer_weight_decay"]},
+            {"params": decay_group, "weight_decay": optimizer_config.weight_decay["transformer_weight_decay"]},
             {"params": no_decay_group, "weight_decay": 0.0}
         ]
         vlm_optim_params = [p for p in self.vlm.parameters() if p.requires_grad]

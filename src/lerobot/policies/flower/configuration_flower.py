@@ -18,9 +18,9 @@ from dataclasses import dataclass, field
 
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.types import NormalizationMode
-from lerobot.optim.optimizers import AdamConfig, AdamWConfig
+from lerobot.optim.optimizers import AdamConfig, AdamWConfig, MultiAdamWConfig, MultiAdamConfig
 from lerobot.optim.schedulers import DiffuserSchedulerConfig
-from lerobot.optim.schedulers import TriStageLRSchedulerConfig
+from lerobot.optim.schedulers import TriStageLRSchedulerConfig, MultiTriStageLRSchedulerPtConfig
 
 
 @PreTrainedConfig.register_subclass("flower")
@@ -52,16 +52,25 @@ class FlowerConfig(PreTrainedConfig):
     # Training presets
     # # Optimizer Configuration
     # optimizer_lr: float = 1e-4
-    optimizer_weight_decay=0.05
-    optimizer_betas=(0.9, 0.95)
-    optimizer_eps=1e-8
+    
+    # optimizer_betas=(0.9, 0.95)
+    # optimizer_eps=1e-8
 
-    init_lr=2e-5
-    init_lr_scale=0.1
-    final_lr_scale=0.5
-    total_steps=50000  # 经过total_steps，lr从init_lr_scale*init_lr到final_lr_scale*init_lr
-    phase_ratio="(0.05, 0.1, 0.85)"
-    lr=2e-5
+    learning_rate_dit: float = 1e-4
+    learning_rate_vlm: float = 2e-5
+    beta_dit = (0.9, 0.95)
+    beta_vlm = (0.9, 0.99)
+
+    weight_decay = {"transformer_weight_decay": 0.1, "vlm_weight_decay": 1e-9}
+    dit_lr_scheduler = {"init_lr_scale": 0.1, "final_lr_scale": 0.1, "phase_ratio": "(0.01, 0.39, 0.6)", "total_steps": 600000}
+    vlm_lr_scheduler = {"init_lr_scale": 0.01, "final_lr_scale": 0.1, "phase_ratio": "(0.1, 0.3, 0.6)", "total_steps": 600000}
+
+    # init_lr=2e-5
+    # init_lr_scale=0.1
+    # final_lr_scale=0.5
+    # total_steps=50000  # 经过total_steps，lr从init_lr_scale*init_lr到final_lr_scale*init_lr
+    # phase_ratio="(0.05, 0.1, 0.85)"
+    # lr=2e-5
 
     # flower:
     # VLM Configuration
@@ -121,24 +130,34 @@ class FlowerConfig(PreTrainedConfig):
         if self.dit_dim % self.n_heads != 0:
             raise ValueError(f"dit_dim ({self.dit_dim}) must be divisible by n_heads ({self.n_heads})")
 
-    def get_optimizer_preset(self) -> AdamWConfig:
-        return AdamWConfig(
-            lr=self.lr,
-            betas=self.optimizer_betas,
-            eps=self.optimizer_eps,
-            weight_decay=self.optimizer_weight_decay,
+    # def get_optimizer_preset(self) -> AdamWConfig:
+    #     return AdamWConfig(
+    #         lr=self.lr,
+    #         betas=self.optimizer_betas,
+    #         eps=self.optimizer_eps,
+    #         weight_decay=self.optimizer_weight_decay,
+    #     )
+
+    def get_optimizer_preset(self):
+        return MultiAdamWConfig(
+            optimizer_groups={"vlm": {"lr": self.learning_rate_vlm, "betas": self.beta_vlm},
+            "dit": {"lr": self.learning_rate_dit, "betas": self.beta_dit}}
         )
 
-    def get_scheduler_preset(self) -> TriStageLRSchedulerConfig:        
-        configs = {"lr_scheduler": {
-            "init_lr": self.init_lr,
-            "init_lr_scale": self.init_lr_scale,
-            "final_lr_scale": self.final_lr_scale,
-            "total_steps": self.total_steps,
-            "phase_ratio": self.phase_ratio,
-            "lr": self.lr,
-        }}
-        return TriStageLRSchedulerConfig(configs=configs)
+    def get_scheduler_preset(self):        
+        scheduler_groups = {"vlm": self.vlm_lr_scheduler, "dit": self.dit_lr_scheduler}
+        return MultiTriStageLRSchedulerPtConfig(scheduler_groups=scheduler_groups)
+
+    # def get_scheduler_preset(self) -> TriStageLRSchedulerConfig:        
+    #     configs = {"lr_scheduler": {
+    #         "init_lr": self.init_lr,
+    #         "init_lr_scale": self.init_lr_scale,
+    #         "final_lr_scale": self.final_lr_scale,
+    #         "total_steps": self.total_steps,
+    #         "phase_ratio": self.phase_ratio,
+    #         "lr": self.lr,
+    #     }}
+    #     return TriStageLRSchedulerConfig(configs=configs)
 
     def validate_features(self) -> None:
         pass
