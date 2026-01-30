@@ -182,12 +182,46 @@ class CosineDecayWithWarmupSchedulerConfig(LRSchedulerConfig):
         return LambdaLR(optimizer, lr_lambda, -1)
 
 
-def save_scheduler_state(scheduler: LRScheduler, save_dir: Path) -> None:
+def save_scheduler_state(
+    scheduler: LRScheduler | dict[str, LRScheduler], save_dir: Path
+) -> None:
+    """Save scheduler state to disk.
+
+    Args:
+        scheduler: Either a single scheduler or a dictionary of schedulers.
+        save_dir: Directory to save the scheduler state.
+    """
+    if isinstance(scheduler, dict):
+        # Handle dictionary of schedulers
+        for name, sched in scheduler.items():
+            scheduler_dir = save_dir / name
+            scheduler_dir.mkdir(exist_ok=True, parents=True)
+            save_single_scheduler_state(sched, scheduler_dir)
+    else:
+        # Handle single scheduler
+        save_single_scheduler_state(scheduler, save_dir)
+
+
+def save_single_scheduler_state(scheduler: LRScheduler, save_dir: Path) -> None:
     state_dict = scheduler.state_dict()
     write_json(state_dict, save_dir / SCHEDULER_STATE)
 
+def load_scheduler_state(scheduler: LRScheduler | dict[str, LRScheduler], save_dir: Path) -> LRScheduler | dict[str, LRScheduler]:
+    if isinstance(scheduler, dict):
+        # Handle dictionary of schedulers
+        loaded_schedulers = {}
+        for name, sched in scheduler.items():
+            scheduler_dir = save_dir / name
+            if scheduler_dir.exists():
+                loaded_schedulers[name] = load_single_scheduler_state(sched, scheduler_dir)
+            else:
+                loaded_schedulers[name] = sched
+        return loaded_schedulers
+    else:
+        # Handle single scheduler 
+        return load_single_scheduler_state(scheduler, save_dir)
 
-def load_scheduler_state(scheduler: LRScheduler, save_dir: Path) -> LRScheduler:
+def load_single_scheduler_state(scheduler: LRScheduler | dict[str, LRScheduler], save_dir: Path) -> LRScheduler | dict[str, LRScheduler]:
     state_dict = deserialize_json_into_object(save_dir / SCHEDULER_STATE, scheduler.state_dict())
     scheduler.load_state_dict(state_dict)
     return scheduler

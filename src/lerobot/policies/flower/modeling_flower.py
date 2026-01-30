@@ -682,14 +682,14 @@ class FlowerModel(nn.Module):
         
         # Merge sequence
         merged_embeds = torch.cat([
-            task_prompt.to(img_features.device),
+            task_prompt.to(img_features.device), # 啥用？
             img_features,
             text_embeds.to(img_features.device)
         ], dim=1)
 
         # Create attention mask
         # attention_mask = torch.ones(merged_embeds.shape[:2], device=merged_embeds.device)
-        prompt_mask = torch.zeros(batch_size, 1, dtype=torch.bool, device=device)
+        prompt_mask = torch.zeros(batch_size, 1, dtype=torch.bool, device=device) # 啥用？
         txt_attention_mask = txt_attention_mask.to(device).squeeze(1)  # get attention mask from txt
         vis_attention_mask = torch.ones(img_features.shape[:2], device=device)  # define attention mask for image
         attention_mask = torch.cat([prompt_mask, vis_attention_mask, txt_attention_mask], dim=1)
