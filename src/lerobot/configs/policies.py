@@ -59,6 +59,8 @@ class PreTrainedConfig(draccus.ChoiceRegistry, HubMixin, abc.ABC):  # type: igno
     output_features: dict[str, PolicyFeature] = field(default_factory=dict)
 
     device: str | None = None  # e.g. "cuda", "cuda:0", "cpu", or "mps"
+    mixed_precision: str | None = None  # e.g. "bf16", "fp16", "fp32"
+    dataset_ratios: list[float] | None = None
     # `use_amp` determines whether to use Automatic Mixed Precision (AMP) for training and evaluation. With AMP,
     # automatic gradient scaling is used.
     use_amp: bool = False

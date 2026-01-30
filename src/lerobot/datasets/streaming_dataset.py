@@ -38,10 +38,48 @@ from lerobot.datasets.video_utils import (
     decode_video_frames_torchcodec,
 )
 from lerobot.utils.constants import HF_LEROBOT_HOME, LOOKAHEAD_BACKTRACKTABLE, LOOKBACK_BACKTRACKTABLE
-import random
-import torchvision.transforms as T
-RESIZE = T.Resize((224,224))
+from lerobot.datasets.utils import process_padding
+import torchvision
 
+CROSS_X_MIX = [
+    # DELTA EEF
+    ("bridge_dataset", 4.2),
+    ("fractal20220817_data", 2.2),
+    ("dobbe", 2.0),
+    # ("bc_z", 0.8),
+    ("cmu_play_fusion", 6.0),
+    ("libero_10_no_noops", 16.0),
+    ("libero_goal_no_noops", 16.0),
+    # ("fmb", 1.0),
+    # ("stanford_hydra_dataset_converted_externally_to_rlds", 6.0),
+    # JOINT STATE
+    ("droid", 0.45),
+    ("robo_set", 3.0),
+    # ("kit_irl_real_kitchen_lang", 24.0),
+    # BIMANUAL JOINT
+    # ("aloha_play_dataset", 4.0),
+    # ("aloha_mobile", 6.0),
+]
+dataset_weight = {
+    "bridge_dataset": 4.2,
+    "fractal20220817_data": 2.2,
+    "dobbe": 2.0,
+    "bc_z_gripper": 0.8,
+    "cmu_play_fusion_lerobot": 6.0,
+    "libero_10_no_noops": 16.0,
+    "libero_goal_no_noops": 16.0,
+    # ("fmb", 1.0),
+    # ("stanford_hydra_dataset_converted_externally_to_rlds", 6.0),
+    # JOINT STATE
+    "droid_1.0.1": 0.45,
+    "robo_set_gripper": 3.0,
+    # ("kit_irl_real_kitchen_lang", 24.0),
+    # BIMANUAL JOINT
+    # ("aloha_play_dataset", 4.0),
+    # ("aloha_mobile", 6.0),
+    'aloha_sim_transfer_cube_scripted_train': 1.0,
+    'aloha_sim_transfer_cube_scripted_val': 1.0,
+}
 
 class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
     """LeRobotDataset with streaming capabilities.
@@ -83,9 +121,9 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
 
     def __init__(
         self,
-        cfg,
         repo_id: str,
         root: str | Path | None = None,
+        cfg = None,
         episodes: list[int] | None = None,
         image_transforms: Callable | None = None,
         delta_timestamps: dict[list[float]] | None = None,
@@ -98,7 +136,7 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         seed: int = 42,
         rng: np.random.Generator | None = None,
         shuffle: bool = True,
-        sub_id: int = 0,
+        sub_idx: int = 0,
     ):
         """Initialize a StreamingLeRobotDataset.
 
@@ -122,7 +160,7 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         self.repo_id = repo_id
         self.root = Path(root) if root else HF_LEROBOT_HOME / repo_id
         self.streaming_from_local = root is not None
-
+        self.sub_idx = sub_idx
         self.image_transforms = image_transforms
         self.episodes = episodes
         self.tolerance_s = tolerance_s
@@ -132,7 +170,7 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         self.shuffle = shuffle
 
         self.streaming = streaming
-        self.buffer_size = buffer_size
+        self.buffer_size = 10
 
         # We cache the video decoders to avoid re-initializing them at each frame (avoiding a ~10x slowdown)
         self.video_decoder_cache = None
@@ -143,12 +181,16 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         self.meta = LeRobotDatasetMetadata(
             self.repo_id, self.root, self.revision, force_cache_sync=force_cache_sync
         )
+        self.weight = dataset_weight[self.repo_id.split("/")[-1]]
         # Check version
         check_version_compatibility(self.repo_id, self.meta._version, CODEBASE_VERSION)
 
         self.delta_timestamps = None
         self.delta_indices = None
-        self.sub_id = sub_id
+
+        if cfg is not None and delta_timestamps is None:
+            from lerobot.datasets.factory import resolve_delta_timestamps
+            self.delta_timestamps = resolve_delta_timestamps(cfg, self.meta)
         if delta_timestamps is not None:
             self._validate_delta_timestamp_keys(delta_timestamps)  # raises ValueError if invalid
             self.delta_timestamps = delta_timestamps
@@ -168,6 +210,21 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         )
 
         self.num_shards = min(self.hf_dataset.num_shards, max_num_shards)
+
+        processor_kwargs={}
+        postprocessor_kwargs={}
+        processor_kwargs["dataset_stats"] = self.meta.stats
+        from lerobot.policies.factory import make_pre_post_processors
+        self.pre, _ = make_pre_post_processors(
+            policy_cfg=cfg,
+            pretrained_path=None,
+            **processor_kwargs,
+            **postprocessor_kwargs,
+        )
+        self.resize = torchvision.transforms.Resize((cfg.resize_h, cfg.resize_w))
+
+    def __len__(self):
+        return self.meta.total_frames
 
     @property
     def num_frames(self):
@@ -349,14 +406,14 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
                 image_keys = self.meta.camera_keys
                 for cam in image_keys:
                     video_frames[cam] = self.image_transforms(video_frames[cam])
-                    video_frames[cam] = RESIZE(video_frames[cam])
+                    video_frames[cam] = self.resize(video_frames[cam])
 
             updates.append(video_frames)
 
         result = item.copy()
         for update in updates:
             result.update(update)
-        # result["sub_id"] = self.sub_id
+        result['sub_idx'] = self.sub_idx
         result["valid"] = valid
         result["task"] = self.meta.tasks.iloc[item["task_index"]].name
         result['robot_type'] = self.meta.info['robot_type']
@@ -365,6 +422,8 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
             if robot in str(self.repo_id):
                 result['robot_type'] = robot
                 break
+        result = self.pre(result)
+        result = process_padding(result, requires_padding=True)
         yield result
 
     def _get_query_timestamps(
@@ -548,65 +607,52 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
             )
 
 
-from transformers import AutoModelForCausalLM, AutoProcessor, AutoConfig, AutoTokenizer
-# from lerobot.policies.flower.utils import generate_policy_prompt, ActionIndex  # 避免circular import
-from torch.utils.data import default_collate
-from lerobot.datasets.utils import ActionIndex, generate_policy_prompt
-class FlowerDataCollator:
-    def __init__(self, vlm_path='/mnt/data/daiwanqin/models/Florence-2-large'):
-        self.processor = AutoProcessor.from_pretrained(vlm_path, trust_remote_code=True)
-        self.tokenizer = self.processor.tokenizer
-        self.action_space_index = ActionIndex()
+import random
+from itertools import cycle
+class MixedIterableDataset:
+    def __init__(self, datasets: List[torch.utils.data.IterableDataset], ratios: List[float]):
+        assert len(datasets) == len(ratios), "datasets 和 ratios 的长度必须相同"
+        assert all(r > 0 for r in ratios), "ratios 中的值必须为正数"
+        self.datasets = datasets
+        self.ratios = ratios
+        print(self.datasets)
 
-    def __call__(self, batch):
-        task_batch = []
-        robot_batch = []
-        other_batch = []
-        
-        for item in batch:
-            if 'task' in item:
-                task_batch.append(item['task'])
-            if 'robot_type' in item:
-                robot_batch.append(item['robot_type'])
-            other_item = {k: v for k, v in item.items() if k != 'task' and k != 'robot_type'}
-            other_batch.append(other_item)
-        
-        constructed_prompts, batch_action_index = self.construct_prompts(task_batch, robot_batch)
-        text_inputs = self.tokenizer(
-            constructed_prompts,
-            return_tensors="pt",
-            padding="max_length",
-            truncation=True,
-            max_length=77
-        )
-        collated_other = default_collate(other_batch) if other_batch else {}
-        
-        result = collated_other
-        result['text_input_ids'] = text_inputs['input_ids']
-        result['text_attention_mask'] = text_inputs.data["attention_mask"]
-        result['action_index'] = batch_action_index
-        # for key, item in result.items():
-        #     print(f"key:{key}, item:{type(item)}")
-        return result
+    def __iter__(self):
+        iterators = [cycle(dataset) for dataset in self.datasets]
 
-    def construct_prompts(self, tasks, robot_types):
-        language_instruction = tasks 
-        text_prompts = []
-        batch_action_index = []
-        for idx, instruction in enumerate(language_instruction):
-            robot_type = robot_types[idx]
-            action_index = self.action_space_index.robot_mapping[robot_type]
-            batch_action_index.append(action_index)
-            instruction = generate_policy_prompt(
-                instruction,
-                robot_name=robot_type,
-                num_arms=self.action_space_index.get_num_arms(action_index),
-                action_space=f"{self.action_space_index.get_action_dim(action_index)}D continuous",
-                prompt_style="minimal",
-                include_meta=True
-                )
-            text_prompts.append(instruction)
-        
-        batch_action_index = torch.tensor(batch_action_index)
-        return text_prompts, batch_action_index
-    
+        while True:
+            dataset_idx = random.choices(
+                range(len(self.datasets)), 
+                weights=self.ratios, 
+                k=1
+            )[0]
+            yield next(iterators[dataset_idx])
+
+import random
+from itertools import cycle, islice
+from typing import List
+import torch
+
+class MixedIterableDataset(torch.utils.data.IterableDataset):
+    def __init__(self, datasets: List[torch.utils.data.IterableDataset], ratios: List[float]):
+        assert len(datasets) == len(ratios), "datasets 和 ratios 的长度必须相同"
+        assert all(r > 0 for r in ratios), "ratios 中的值必须为正数"
+        self.datasets = datasets
+        self.ratios = ratios
+
+    def __iter__(self):
+        # 创建每个子数据集的迭代器
+        iterators = [iter(dataset) for dataset in self.datasets]
+
+        while True:
+            # 按照给定的权重随机选择一个子数据集
+            dataset_idx = random.choices(
+                range(len(self.datasets)), 
+                weights=self.ratios, 
+                k=1
+            )[0]
+            try:
+                yield next(iterators[dataset_idx])
+            except StopIteration:
+                iterators[dataset_idx] = iter(self.datasets[dataset_idx])
+                print(f"子数据集 {dataset_idx} 迭代器已重新创建")

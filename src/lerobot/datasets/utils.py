@@ -1474,6 +1474,7 @@ class ActionIndex:
             'franka': 0,
             'lift2': 1,
             'split_aloha': 1,
+            'aloha': 1,
             'genie1': 2,
         }
 
@@ -1538,3 +1539,119 @@ class ActionIndex:
                 return name
         raise ValueError(f"Invalid action index: {action_idx}")
 
+
+from transformers import AutoModelForCausalLM, AutoProcessor, AutoConfig, AutoTokenizer
+# from lerobot.policies.flower.utils import generate_policy_prompt, ActionIndex  # 避免circular import
+from torch.utils.data import default_collate
+# from lerobot.datasets.utils import ActionIndex, generate_policy_prompt
+class FlowerDataCollator:
+    def __init__(self, vlm_path='/mnt/data/daiwanqin/models/Florence-2-large', ):
+        self.processor = AutoProcessor.from_pretrained(vlm_path, trust_remote_code=True)
+        self.tokenizer = self.processor.tokenizer
+        self.action_space_index = ActionIndex()
+ 
+
+    def __call__(self, batch):
+        task_batch = []
+        robot_batch = []
+        other_batch = []
+        
+        for item in batch:
+            if 'task' in item:
+                task_batch.append(item['task'])
+            if 'robot_type' in item:
+                robot_batch.append(item['robot_type'])
+            other_item = {k: v for k, v in item.items() if k != 'task' and k != 'robot_type'}
+            other_batch.append(other_item)
+        
+        constructed_prompts, batch_action_index = self.construct_prompts(task_batch, robot_batch)
+        text_inputs = self.tokenizer(
+            constructed_prompts,
+            return_tensors="pt",
+            padding="max_length",
+            truncation=True,
+            max_length=77
+        )
+        collated_other = default_collate(other_batch) if other_batch else {}
+        
+        result = collated_other
+        result['text_input_ids'] = text_inputs['input_ids']
+        result['text_attention_mask'] = text_inputs.data["attention_mask"]
+        result['action_index'] = batch_action_index
+        return result
+
+    def construct_prompts(self, tasks, robot_types):
+        language_instruction = tasks
+        text_prompts = []
+        batch_action_index = []
+        for idx, instruction in enumerate(language_instruction):
+            # print(robot_types)
+            robot_type = robot_types[idx]
+            action_index = self.action_space_index.robot_mapping[robot_type]
+            batch_action_index.append(action_index)
+            instruction = generate_policy_prompt(
+                instruction,
+                robot_name=robot_type,
+                num_arms=self.action_space_index.get_num_arms(action_index),
+                action_space=f"{self.action_space_index.get_action_dim(action_index)}D continuous",
+                prompt_style="minimal",
+                include_meta=True
+                )
+            text_prompts.append(instruction)
+        
+        batch_action_index = torch.tensor(batch_action_index)
+        return text_prompts, batch_action_index
+
+# def construct_prompts(self, dataset_batch):
+#     language_instruction = dataset_batch["task"]
+#     text_prompts = []
+#     batch_action_index = []
+#     for idx, instruction in enumerate(language_instruction):
+#         if self.config.vlm_prompt_style == "default":
+#             # Original instruction only
+#             robot_type = dataset_batch['info']["robot_type"][idx]
+#             action_index = self.action_space_index.robot_mapping[robot_type]
+#             batch_action_index.append(action_index)
+#             instruction = generate_policy_prompt(
+#                 instruction,
+#                 robot_name=robot_type,
+#                 num_arms=self.action_space_index.get_num_arms(action_index),
+#                 action_space=f"{self.action_space_index.get_action_dim(action_index)}D continuous",
+#                 prompt_style="minimal",
+#                 include_meta=True
+#                 )
+#             text_prompts.append(instruction)
+#             # text_prompts.append(self.format_instruction(instruction))
+#         else:
+#             raise ValueError(f"Unknown prompt style: {self.config.vlm_prompt_style}")
+    
+#     batch_action_index = torch.tensor(batch_action_index)
+#     return text_prompts, batch_action_index
+
+
+from lerobot.utils.constants import OBS_IMAGES, OBS_STATE, ACTION, MAX_ACTION_DIM
+import torch.nn.functional as F
+def process_padding(batch, requires_padding=False):
+    if requires_padding:
+
+        horizon, action_dim = batch[ACTION].shape
+        if action_dim > MAX_ACTION_DIM:
+            raise ValueError(f"原始动作维度{action_dim}超过允许最大维度{MAX_ACTION_DIM}")
+
+        pad = MAX_ACTION_DIM - action_dim
+        pad_params = (0, pad) + (0, 0) * (batch[ACTION].ndim - 1)
+        batch[ACTION] = F.pad(batch[ACTION], pad_params, mode='constant', value=0.0)
+        batch[OBS_STATE] = F.pad(batch[OBS_STATE], pad_params, mode='constant', value=0.0)
+        batch[f'{ACTION}_mask'] = torch.ones(
+             MAX_ACTION_DIM,
+            device=batch[ACTION].device, dtype=torch.bool
+            )
+        batch[f'{OBS_STATE}_mask'] = torch.ones(
+             MAX_ACTION_DIM,
+            device=batch[OBS_STATE].device, dtype=torch.bool
+            )
+        if pad > 0:
+            batch[f'{ACTION}_mask'][..., -pad:] = False
+            batch[f'{OBS_STATE}_mask'][..., -pad:] = False
+    
+    return batch
