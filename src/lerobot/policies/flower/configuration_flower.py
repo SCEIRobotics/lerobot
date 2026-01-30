@@ -83,6 +83,7 @@ class FlowerConfig(PreTrainedConfig):
     # Model Structure
     data_frequency: int = 3 # 30Hz. 要用fps代替吗？
     device = 'cuda'
+    mixed_precision = 'bf16'
     # pretraining stuff
     load_pretrained=False
     pretrained_model_path='/mnt/data/daiwanqin/models/flower_vla_pret/360000_model_weights.pt'
@@ -110,6 +111,9 @@ class FlowerConfig(PreTrainedConfig):
     use_nope=False
     query_seq_len=100
     rope_theta=32.0
+
+    resize_h=224
+    resize_w=224
 
     def __post_init__(self):
         super().__post_init__()

@@ -155,6 +155,7 @@ class EditDatasetConfig:
     repo_id: str
     operation: DeleteEpisodesConfig | SplitConfig | MergeConfig | RemoveFeatureConfig | ConvertToVideoConfig
     root: str | None = None
+    root_1: str | None = None
     new_repo_id: str | None = None
     push_to_hub: bool = False
 
@@ -221,7 +222,8 @@ def handle_split(cfg: EditDatasetConfig) -> None:
     dataset = LeRobotDataset(cfg.repo_id, root=cfg.root)
 
     logging.info(f"Splitting dataset {cfg.repo_id} with splits: {cfg.operation.splits}")
-    split_datasets = split_dataset(dataset, splits=cfg.operation.splits)
+    output_dir = Path(cfg.root_1)
+    split_datasets = split_dataset(dataset, splits=cfg.operation.splits, output_dir=output_dir)
 
     for split_name, split_ds in split_datasets.items():
         split_repo_id = f"{cfg.repo_id}_{split_name}"

@@ -413,8 +413,8 @@ def make_policy(
         NotImplementedError: If attempting to use an unsupported policy-backend
                              combination (e.g., VQBeT with 'mps').
     """
-    # if bool(ds_meta) == bool(env_cfg):
-    #     raise ValueError("Either one of a dataset metadata or a sim env must be provided.")
+    if bool(ds_meta) == bool(env_cfg):
+        raise ValueError("Either one of a dataset metadata or a sim env must be provided.")
 
     # NOTE: Currently, if you try to run vqbet with mps backend, you'll get this error.
     # TODO(aliberts, rcadene): Implement a check_backend_compatibility in policies?
@@ -470,9 +470,9 @@ def make_policy(
 
     # policy = torch.compile(policy, mode="reduce-overhead")
 
-    # if not rename_map:
-    #     validate_visual_features_consistency(cfg, features)
-    #     # TODO: (jadechoghari) - add a check_state(cfg, features) and check_action(cfg, features)
+    if not rename_map:
+        validate_visual_features_consistency(cfg, features)
+        # TODO: (jadechoghari) - add a check_state(cfg, features) and check_action(cfg, features)
 
     return policy
 

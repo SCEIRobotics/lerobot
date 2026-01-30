@@ -166,7 +166,7 @@ def _extract_complementary_data(batch: dict[str, Any]) -> dict[str, Any]:
     Returns:
         A dictionary with the extracted complementary data.
     """
-    keys = ["valid", "text_input_ids", "text_attention_mask", "action_index"]
+    keys = ["valid", 'robot_type',  "text_input_ids", "text_attention_mask", "action_index"]
     extra_keys = {k: batch[k] for k in keys if batch.get(k) is not None}
     
     pad_keys = {k: v for k, v in batch.items() if "_is_pad" in k}
