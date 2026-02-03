@@ -402,13 +402,17 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         dataloader = accelerator.prepare(dataloader)
         dataloaders.append(dataloader)
  
-    policy = accelerator.unwrap_model(policy)
+    policy = accelerator.prepare(policy)
     if isinstance(optimizer, dict):
         for key, opt in optimizer.items():
             optimizer[key] = accelerator.prepare(opt)
+    else:
+        optimizer = accelerator.prepare(optimizer)
     if isinstance(lr_scheduler, dict):
         for key, sch in lr_scheduler.items():
             lr_scheduler[key] = accelerator.prepare(sch)
+    else:
+        lr_scheduler = accelerator.prepare(lr_scheduler)
 
     dl_iters = [cycle(dl) for dl in dataloaders]
 
