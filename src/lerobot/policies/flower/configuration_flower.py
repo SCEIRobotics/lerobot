@@ -56,14 +56,27 @@ class FlowerConfig(PreTrainedConfig):
     # optimizer_betas=(0.9, 0.95)
     # optimizer_eps=1e-8
 
-    learning_rate_dit: float = 1e-4
-    learning_rate_vlm: float = 2e-5
-    beta_dit = (0.9, 0.95)
-    beta_vlm = (0.9, 0.99)
+    # sft:
+    optimizer_weight_decay=0.05
+    optimizer_betas=(0.9, 0.95)
+    optimizer_eps=1e-8
 
-    weight_decay = {"transformer_weight_decay": 0.1, "vlm_weight_decay": 1e-9}
-    dit_lr_scheduler = {"init_lr_scale": 0.1, "final_lr_scale": 0.1, "phase_ratio": "(0.01, 0.39, 0.6)", "total_steps": 600000}
-    vlm_lr_scheduler = {"init_lr_scale": 0.01, "final_lr_scale": 0.1, "phase_ratio": "(0.1, 0.3, 0.6)", "total_steps": 600000}
+    init_lr=2e-5
+    init_lr_scale=0.1
+    final_lr_scale=0.5
+    total_steps=50000  # 经过total_steps，lr从init_lr_scale*init_lr到final_lr_scale*init_lr
+    phase_ratio="(0.05, 0.1, 0.85)"
+    lr=2e-5
+
+    # pret:
+    # learning_rate_dit: float = 1e-4
+    # learning_rate_vlm: float = 2e-5
+    # beta_dit = (0.9, 0.95)
+    # beta_vlm = (0.9, 0.99)
+
+    # weight_decay = {"transformer_weight_decay": 0.1, "vlm_weight_decay": 1e-9}
+    # dit_lr_scheduler = {"init_lr_scale": 0.1, "final_lr_scale": 0.1, "phase_ratio": "(0.01, 0.39, 0.6)", "total_steps": 600000}
+    # vlm_lr_scheduler = {"init_lr_scale": 0.01, "final_lr_scale": 0.1, "phase_ratio": "(0.1, 0.3, 0.6)", "total_steps": 600000}
 
     # init_lr=2e-5
     # init_lr_scale=0.1
@@ -74,9 +87,10 @@ class FlowerConfig(PreTrainedConfig):
 
     # flower:
     # VLM Configuration
-    vlm_path='/mnt/data/daiwanqin/models/Florence-2-large'
+    vlm_path='/mnt/data_ssd/share/models/Florence-2-large'
     freeze_florence=False
     freeze_vision_tower=False
+    freeze_embeddings_only=False
     vlm_prompt_style='default'
     token_dropout=0.1  # Added token dropout parameter
 
@@ -85,8 +99,8 @@ class FlowerConfig(PreTrainedConfig):
     device = 'cuda'
     mixed_precision = 'bf16'
     # pretraining stuff
-    load_pretrained=False
-    pretrained_model_path='/mnt/data/daiwanqin/models/flower_vla_pret/360000_model_weights.pt'
+    load_pretrained=True
+    pretrained_model_path='/mnt/data_ssd/share/models/flower_vla_pret/360000_model_weights.pt'
 
     # Model flags
     action_type_adaln=True
@@ -114,6 +128,7 @@ class FlowerConfig(PreTrainedConfig):
 
     resize_h=224
     resize_w=224
+    cams='observation.images.top'
 
     def __post_init__(self):
         super().__post_init__()
@@ -134,34 +149,34 @@ class FlowerConfig(PreTrainedConfig):
         if self.dit_dim % self.n_heads != 0:
             raise ValueError(f"dit_dim ({self.dit_dim}) must be divisible by n_heads ({self.n_heads})")
 
-    # def get_optimizer_preset(self) -> AdamWConfig:
-    #     return AdamWConfig(
-    #         lr=self.lr,
-    #         betas=self.optimizer_betas,
-    #         eps=self.optimizer_eps,
-    #         weight_decay=self.optimizer_weight_decay,
-    #     )
-
-    def get_optimizer_preset(self):
-        return MultiAdamWConfig(
-            optimizer_groups={"vlm": {"lr": self.learning_rate_vlm, "betas": self.beta_vlm},
-            "dit": {"lr": self.learning_rate_dit, "betas": self.beta_dit}}
+    def get_optimizer_preset(self) -> AdamWConfig:
+        return AdamWConfig(
+            lr=self.lr,
+            betas=self.optimizer_betas,
+            eps=self.optimizer_eps,
+            weight_decay=self.optimizer_weight_decay,
         )
 
-    def get_scheduler_preset(self):        
-        scheduler_groups = {"vlm": self.vlm_lr_scheduler, "dit": self.dit_lr_scheduler}
-        return MultiTriStageLRSchedulerPtConfig(scheduler_groups=scheduler_groups)
+    # def get_optimizer_preset(self):
+    #     return MultiAdamWConfig(
+    #         optimizer_groups={"vlm": {"lr": self.learning_rate_vlm, "betas": self.beta_vlm},
+    #         "dit": {"lr": self.learning_rate_dit, "betas": self.beta_dit}}
+    #     )
 
-    # def get_scheduler_preset(self) -> TriStageLRSchedulerConfig:        
-    #     configs = {"lr_scheduler": {
-    #         "init_lr": self.init_lr,
-    #         "init_lr_scale": self.init_lr_scale,
-    #         "final_lr_scale": self.final_lr_scale,
-    #         "total_steps": self.total_steps,
-    #         "phase_ratio": self.phase_ratio,
-    #         "lr": self.lr,
-    #     }}
-    #     return TriStageLRSchedulerConfig(configs=configs)
+    # def get_scheduler_preset(self):        
+    #     scheduler_groups = {"vlm": self.vlm_lr_scheduler, "dit": self.dit_lr_scheduler}
+    #     return MultiTriStageLRSchedulerPtConfig(scheduler_groups=scheduler_groups)
+
+    def get_scheduler_preset(self) -> TriStageLRSchedulerConfig:        
+        configs = {"lr_scheduler": {
+            "init_lr": self.init_lr,
+            "init_lr_scale": self.init_lr_scale,
+            "final_lr_scale": self.final_lr_scale,
+            "total_steps": self.total_steps,
+            "phase_ratio": self.phase_ratio,
+            "lr": self.lr,
+        }}
+        return TriStageLRSchedulerConfig(configs=configs)
 
     def validate_features(self) -> None:
         pass

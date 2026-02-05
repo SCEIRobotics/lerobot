@@ -49,7 +49,7 @@ from lerobot.policies.utils import (
 )
 from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_IMAGES, OBS_STATE
 from lerobot.policies.flower.configuration_flower import FlowerConfig
-from lerobot.policies.flower.utils import generate_policy_prompt, ActionIndex
+from lerobot.datasets.utils import generate_policy_prompt, ActionIndex
 from lerobot.policies.flower.transformers_flower import (
     TimestepEmbedder,
     SharedAdaLNController,
@@ -62,9 +62,10 @@ from lerobot.policies.flower.transformers_flower import (
 )
 from torchvision.utils import save_image
 from lerobot.utils.constants import MAX_ACTION_DIM
-DEFAULT_DTYPE = torch.float32
-# torch.bfloat16
-# torch.float32
+dtype_map = {
+    'bf16': torch.bfloat16,
+    'no': torch.float32
+}
 
 class FlowerPolicy(PreTrainedPolicy):
     """
@@ -98,12 +99,32 @@ class FlowerPolicy(PreTrainedPolicy):
 
         self.resize = torchvision.transforms.Resize((config.resize_h, config.resize_w))
 
+    # def get_optim_params(self) -> dict:
+    #     # return self.flower.parameters()
+    #     """Get parameter groups for optimizer"""
+    #     dit_optim_groups, vlm_optim_params = self.flower._configure_optimizers(self.config)
+    #     return {"dit": dit_optim_groups, "vlm": vlm_optim_params}
+    
     def get_optim_params(self) -> dict:
         # return self.flower.parameters()
         """Get parameter groups for optimizer"""
-        dit_optim_groups, vlm_optim_params = self.flower._configure_optimizers(self.config)
-        return {"dit": dit_optim_groups, "vlm": vlm_optim_params}
-        
+        no_decay = ['bias', 'LayerNorm', 'layernorm', 'ln', 'norm']
+        decay_group = []
+        no_decay_group = []
+
+        # Collect all parameters, excluding VLM if frozen
+        for name, param in self.flower.named_parameters():
+            if param.requires_grad:
+                if any(nd in name.lower() for nd in no_decay):
+                    no_decay_group.append(param)
+                else:
+                    decay_group.append(param)
+
+        return [
+            {"params": decay_group, "weight_decay": self.config.optimizer_weight_decay},
+            {"params": no_decay_group, "weight_decay": 0.0}
+        ]
+
 
     def reset(self):
         """Clear observation and action queues. Should be called on `env.reset()`"""
@@ -116,13 +137,14 @@ class FlowerPolicy(PreTrainedPolicy):
         """Predict a chunk of actions given environment observations."""
         # stack n latest observations from the queue
         # batch = {k: torch.stack(list(self._queues[k]), dim=1) for k in batch if k in self._queues}
-        # constructed_prompts, batch_action_index = self.flower.construct_prompts(batch['task'])
-        # text_inputs = self.flower._get_text_inputs(constructed_prompts)
-        # batch['text_input_ids'] = text_inputs['input_ids']
-        # batch['text_attention_mask'] = text_inputs.data["attention_mask"]
-        # batch['action_index'] = batch_action_index
-        # batch['observation.state'] = batch['observation.state'].unsqueeze(1)
-
+        constructed_prompts, batch_action_index = self.flower.construct_prompts(batch['task'])
+        text_inputs = self.flower._get_text_inputs(constructed_prompts)
+        # import pdb; pdb.set_trace()
+        batch['text_input_ids'] = text_inputs['input_ids']
+        batch['text_attention_mask'] = text_inputs.data["attention_mask"]
+        batch['action_index'] = batch_action_index
+        batch['observation.state'] = batch['observation.state'].unsqueeze(1)
+        # import pdb; pdb.set_trace()
         actions = self.flower.generate_actions(batch, noise=noise)
 
         return actions
@@ -146,14 +168,12 @@ class FlowerPolicy(PreTrainedPolicy):
 
     @torch.no_grad()
     def validate_action(self, batch: dict[str, Tensor], noise: Tensor | None = None) -> Tensor:
-        if ACTION in batch:
-            gt = batch[ACTION]
+        gt = batch[ACTION]
 
         if self.config.image_features:
             batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original     
             batch = self.preprocess_batch(batch)
         actions = self.flower.generate_actions(batch, noise=noise)
-        # import pdb; pdb.set_trace()
         loss = self.flower.compute_val_loss(batch, actions - gt)
         return loss
 
@@ -161,8 +181,9 @@ class FlowerPolicy(PreTrainedPolicy):
         if self.config.image_features:
             images = []
             for key in self.config.image_features:
-                # if key!='observation.images.rgb.head':
-                #     continue
+            # for key in self.config.cams:
+            # if True:
+                # key = self.config.cams
                 image = batch[key] if len(batch[key].shape)==5 else batch[key].unsqueeze(1)
                 bs, obs, c, h, w = image.shape
                 image = image.view(bs*obs, c, h, w)
@@ -170,6 +191,7 @@ class FlowerPolicy(PreTrainedPolicy):
                 image = image.view(bs, obs, c, self.config.resize_h, self.config.resize_w)
                 images.append(image)
             batch[OBS_IMAGES] = torch.stack(images, dim=-4)  # (bs, obs, cam, c, h, w)
+            # import pdb; pdb.set_trace()
         return batch
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, None]:
@@ -188,15 +210,14 @@ class FlowerModel(nn.Module):
         self.config = config
         self.num_inference_steps = config.num_inference_steps
         self.device = config.device
-        
-        # Initialize configurations: 已移到configuration_flower
-        # Set task prompt format: 已移到stream dataset 处理
+        self.mixed_precision = config.mixed_precision
         
         # Setup VLM and core components
         self._setup_vlm(
             config.vlm_path, 
             config.freeze_vision_tower, 
-            config.freeze_florence
+            config.freeze_florence,
+            config.freeze_embeddings_only
             )
         self.config.hidden_dim = self.vlm.config.text_config.d_model
         self.vlm_latent_dim = self.config.hidden_dim
@@ -208,9 +229,12 @@ class FlowerModel(nn.Module):
         # Load pretrained weights if specified，只用于加载flower原始训练框架预训练模型
         if config.load_pretrained and config.pretrained_model_path is not None:
             self._load_pretrained_weights(config.pretrained_model_path)
+        
+        # Ensure that all parameters and buffers are on the correct device.
+        self.ensure_device_consistency()
 
     # ========= init  ============
-    def _setup_vlm(self, vlm_path: str, freeze_vision_tower: bool, freeze_florence: bool):
+    def _setup_vlm(self, vlm_path: str, freeze_vision_tower: bool, freeze_florence: bool, freeze_embeddings_only: bool):
         """Initialize and configure the Florence-2 VLM"""
         print(f"Loading Florence-2 from {vlm_path}")
         
@@ -220,7 +244,14 @@ class FlowerModel(nn.Module):
         if freeze_florence:
             for param in self.vlm.parameters():
                 param.requires_grad = False
-        elif not freeze_vision_tower:
+        elif freeze_embeddings_only:
+            embedding_layer = self.vlm.get_input_embeddings()
+            for param in embedding_layer.parameters():
+                param.requires_grad = False
+            if hasattr(self.vlm.language_model, 'shared'):
+                for param in self.vlm.language_model.shared.parameters():
+                    param.requires_grad = False
+        if not freeze_vision_tower:
             for param in self.vlm.vision_tower.parameters():
                 param.requires_grad = True
 
@@ -301,12 +332,20 @@ class FlowerModel(nn.Module):
 
             if self.config.use_proprio:
                 # Add proprio encoder if needed for bimanual nav variant otherwise use zero encoder
-                self.proprio_encoders[action_name] = Mlp(
+                if self.action_space_index.get_num_arms(action_idx) == 2:
+                    self.proprio_encoders[action_name] = Mlp(
                     input_dim, 
                     self.config.dit_dim, 
                     out_features=self.config.dit_dim, 
                     drop=0.2
-                    ).to(self.device) 
+                    ).to(self.device)
+                    print(f"Added proprio encoder for {action_name}")
+                else:
+                    self.proprio_encoders[action_name] = ZeroEncoder(
+                        self.config.dit_dim,
+                        device=self.device
+                    ) 
+                    print(f"Added zero encoder for {action_name}")
             
     def _load_pretrained_weights(self, pretrained_model_path: str, mean_resizing: bool = False):
         """Loads pretrained weights, handling key mismatches (e.g., different prefixes)."""
@@ -450,7 +489,30 @@ class FlowerModel(nn.Module):
         ]
         vlm_optim_params = [p for p in self.vlm.parameters() if p.requires_grad]
         return dit_optim_groups, vlm_optim_params
+    
+    def ensure_device_consistency(self) -> None:
+        """Moves the entire model (and buffers) to the designated device."""
+        self.to(self.device)
+        self.vlm.to(self.device)
+        if not self.config.use_rope and hasattr(self, 'positional_encoding'):
+            self.positional_encoding = self.positional_encoding.to(self.device)
+        if self.config.use_readout_token and hasattr(self, 'register_token'):
+            self.register_token = self.register_token.to(self.device)
+        self._verify_device_consistency()
 
+    def _verify_device_consistency(self) -> None:
+        """Verifies that all parameters and buffers are on the expected device."""
+        expected = self.device
+        inconsistent = []
+        for name, param in self.named_parameters():
+            if str(param.device) != expected:
+                inconsistent.append(f"{name}: {param.device} (expected {expected})")
+        for name, buf in self.named_buffers():
+            if str(buf.device) != expected:
+                inconsistent.append(f"{name} (buffer): {buf.device} (expected {expected})")
+        if inconsistent:
+            print("Device consistency issues: " + "; ".join(inconsistent))
+    
     # ========= inference  ============
     def conditional_sample(
         self,
@@ -511,7 +573,8 @@ class FlowerModel(nn.Module):
         start = n_obs_steps - 1
         end = start + self.config.n_action_steps
         # actions = actions[:, start:end]
-
+        adim = self.action_space_index.get_action_dim(batch['action_index'][0])
+        actions = actions[:, :, :adim]
         return actions
 
     def compute_loss(self, batch: dict[str, Tensor]) -> Tensor:
@@ -795,42 +858,43 @@ class FlowerModel(nn.Module):
     
         return prompt_embed.unsqueeze(0).unsqueeze(0)
 
-    def construct_prompts(self, dataset_batch):
-        """
-        Constructs prompts for Florence-2's encoder to extract task-relevant visual features.
-        
-        Args:
-            dataset_batch: Dictionary containing task information including language instructions
-            
-        Returns:
-            text_prompts: List of formatted prompts for encoder conditioning
-        """
-    
-        language_instruction = dataset_batch["task"]
+    def construct_prompts(self, tasks):
+        language_instruction = tasks
         text_prompts = []
         batch_action_index = []
         for idx, instruction in enumerate(language_instruction):
-            if self.config.vlm_prompt_style == "default":
-                # Original instruction only
-                robot_type = dataset_batch['info']["robot_type"][idx]
-                action_index = self.action_space_index.robot_mapping[robot_type]
-                batch_action_index.append(action_index)
-                instruction = generate_policy_prompt(
-                    instruction,
-                    robot_name=robot_type,
-                    num_arms=self.action_space_index.get_num_arms(action_index),
-                    action_space=f"{self.action_space_index.get_action_dim(action_index)}D continuous",
-                    prompt_style="minimal",
-                    include_meta=True
-                    )
-                text_prompts.append(instruction)
-                # text_prompts.append(self.format_instruction(instruction))
-            else:
-                raise ValueError(f"Unknown prompt style: {self.config.vlm_prompt_style}")
-        
+            # print(robot_types)
+            # robot_type = 'panda'
+            robot_type = 'aloha'
+            instruction = 'Pick up the cube with the right arm and transfer it to the left arm.'
+            action_index = self.action_space_index.robot_mapping[robot_type]
+            batch_action_index.append(action_index)
+            instruction = generate_policy_prompt(
+                instruction,
+                robot_name=robot_type,
+                num_arms=self.action_space_index.get_num_arms(action_index),
+                action_space=f"{self.action_space_index.get_action_dim(action_index)}D continuous",
+                prompt_style="minimal",
+                include_meta=True
+                )
+            text_prompts.append(instruction)
+        print(instruction)
         batch_action_index = torch.tensor(batch_action_index)
         return text_prompts, batch_action_index
-
+    
+    def _get_text_inputs(self, constructed_prompts):
+        text_inputs = self.tokenizer(
+                constructed_prompts,
+                return_tensors="pt",
+                padding="max_length",
+                truncation=True,
+                max_length=77
+            )
+        # result['text_input_ids'] = text_inputs['input_ids']
+        # result['text_attention_mask'] = text_inputs.data["attention_mask"]
+        # result['action_index'] = batch_action_index
+        return text_inputs
+    
     def _get_text_embeddings_new(self, text_inputs, device):
         """Get text embeddings to use with VLM"""
         text_inputs = text_inputs.to(device)
@@ -843,14 +907,13 @@ class FlowerModel(nn.Module):
         """
         batch_size, _, _ = output_shape
         device = get_device_from_parameters(self)
-        default_dtype = next(self.parameters()).dtype
+        default_dtype = dtype_map[self.mixed_precision] #next(self.parameters()).dtype
         
         if not self.config.use_proprio:
             return torch.zeros(batch_size, self.config.dit_dim, device=device)
 
-        # proprio = proprio.squeeze(1).to(device)
         proprio = proprio.mean(dim=1).to(device)
-        encoded_proprio = torch.zeros(batch_size, self.config.dit_dim, device=device, dtype=DEFAULT_DTYPE)
+        encoded_proprio = torch.zeros(batch_size, self.config.dit_dim, device=device, dtype=default_dtype)
         for action_name, action_idx in self.action_space_index.action_spaces.items():
             mask = (action_type == action_idx)
             if mask.any():
@@ -862,14 +925,9 @@ class FlowerModel(nn.Module):
         """Encode actions using action-specific encoders."""
         batch_size, _, _ = z.shape
         device = get_device_from_parameters(self)
-        default_dtype = next(self.parameters()).dtype
+        default_dtype = dtype_map[self.mixed_precision] # next(self.parameters()).dtype
         
-        # for action_name, action_idx in self.action_space_index.action_spaces.items():
-        #     mask = (action_type == action_idx)
-        #     if mask.any():
-        #         encoded = self.action_encoders[action_name](z)
-        
-        encoded = torch.zeros(batch_size, z.shape[1], self.config.dit_dim, device=device, dtype=DEFAULT_DTYPE)
+        encoded = torch.zeros(batch_size, z.shape[1], self.config.dit_dim, device=device, dtype=default_dtype)
         valid_dims = torch.zeros_like(z, dtype=default_dtype)
         for action_name, action_idx in self.action_space_index.action_spaces.items():
             mask = (action_type == action_idx)
@@ -883,7 +941,7 @@ class FlowerModel(nn.Module):
     def decode_actions(self, z: torch.Tensor, action_type: torch.Tensor, valid_dims: torch.Tensor) -> torch.Tensor:
         """Decode actions using action-specific decoders."""
         device = get_device_from_parameters(self)
-        default_dtype = next(self.parameters()).dtype
+        default_dtype = dtype_map[self.mixed_precision] #next(self.parameters()).dtype
         
         for action_name, action_idx in self.action_space_index.action_spaces.items():
             mask = (action_type == action_idx)
@@ -892,13 +950,13 @@ class FlowerModel(nn.Module):
 
         batch_size = z.shape[0]
         max_action_dim = self.action_space_index.get_max_action_dim()
-        decoded = torch.zeros(batch_size, z.shape[1], max_action_dim, device=device, dtype=DEFAULT_DTYPE)
+        decoded = torch.zeros(batch_size, z.shape[1], max_action_dim, device=device, dtype=default_dtype)
         for action_name, action_idx in self.action_space_index.action_spaces.items():
             mask = (action_type == action_idx)
             if mask.any():
                 adim = self.action_space_index.get_action_dim(action_idx)
                 pred = self.action_decoders[action_name](z[mask])
-                decoded[mask, :, :adim] = (pred[..., :adim] * valid_dims[mask, :, :adim]).to(DEFAULT_DTYPE)
+                decoded[mask, :, :adim] = pred[..., :adim] * valid_dims[mask, :, :adim]
 
         return decoded
 
@@ -907,22 +965,14 @@ class FlowerModel(nn.Module):
         Generate action-specific AdaLN signals.
         """
         device = get_device_from_parameters(self)  # global_cond.device
-        default_type = next(self.parameters()).dtype
+        default_dtype = dtype_map[self.mixed_precision] # next(self.parameters()).dtype
         batch_size = global_cond.shape[0]
         num_chunks = 9 if self.config.use_cross_attn else 6
         
         mod_signals = [
-            torch.zeros(batch_size, self.config.dit_dim, device=device, dtype=DEFAULT_DTYPE) 
+            torch.zeros(batch_size, self.config.dit_dim, device=device, dtype=default_dtype) 
             for _ in range(num_chunks)
         ]
-        
-        # for action_idx in range(len(self.action_space_index.action_spaces)):
-        #     mask = (action_type == action_idx)
-        #     if mask.any():
-        #         action_name = self.action_space_index.get_action_name(action_idx)
-        #         action_mod = self.adaln[action_name](global_cond)
-        #         for i, signal in enumerate(action_mod):
-        #             mod_signals[i] = signal
 
         for action_idx in range(len(self.action_space_index.action_spaces)):
             mask = (action_type == action_idx)

@@ -30,6 +30,7 @@ class DatasetConfig:
     # Root directory where the dataset will be stored (e.g. 'dataset/path').
     root: str | None = None
     root_val: str | None = None
+    repo_id_val: str | None = None
     episodes: list[int] | None = None
     image_transforms: ImageTransformsConfig = field(default_factory=ImageTransformsConfig)
     revision: str | None = None

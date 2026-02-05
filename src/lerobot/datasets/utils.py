@@ -1453,30 +1453,62 @@ class ActionIndex:
     def __init__(self):
         # Define action spaces with their dimensions
         self.action_spaces = {
-            'pos-1_arm-8_dim': 0, 
-            'pos-2_arm-14_dim': 1,
-            'pos-2_arm-16_dim': 2,
+            'joint_single': 0,  # Single arm joint position control (type 0)
+            'eef_delta': 1,    # Single arm end-effector velocity (type 1) 
+            'bimanual_nav': 2, # Bimanual with navigation (type 2),
+            # 'nav': 3,         # Navigation (type 3)
+            'bimanual': 3,
         }
         
         self.action_dims = {
-            'pos-1_arm-8_dim': 8, 
-            'pos-2_arm-14_dim': 14,
-            'pos-2_arm-16_dim': 16,
+            'joint_single': 8,  # Single arm joint position control (type 0)
+            'eef_delta': 7,    # Single arm end-effector velocity (type 1) 
+            'bimanual_nav': 16, # Bimanual with navigation (type 2),
+            # 'nav': 2,         # Navigation (type 3)
+            'bimanual': 14,
         }
 
         self.robot_arm = {
-            'pos-1_arm-8_dim': 1, 
-            'pos-2_arm-14_dim': 2,
-            'pos-2_arm-16_dim': 2,
+            'joint_single': 1,  # Single arm joint position control (type 0)
+            'eef_delta': 1,    # Single arm end-effector velocity (type 1) 
+            'bimanual_nav': 2, # Bimanual with navigation (type 2),
+            # 'nav': 2,         # Navigation (type 3)
+            'bimanual': 2,
         }
 
         self.robot_mapping = {
-            'franka': 0,
-            'lift2': 1,
-            'split_aloha': 1,
-            'aloha': 1,
-            'genie1': 2,
+            "Google Robot": 1,
+            "unknown": 1,
+            "Franka": 0, 
+            'aloha': 3,
+            "panda": 1
         }
+
+        # self.action_spaces = {
+        #     'pos-1_arm-8_dim': 0, 
+        #     'pos-2_arm-14_dim': 1,
+        #     'pos-2_arm-16_dim': 2,
+        # }
+        
+        # self.action_dims = {
+        #     'pos-1_arm-8_dim': 8, 
+        #     'pos-2_arm-14_dim': 14,
+        #     'pos-2_arm-16_dim': 16,
+        # }
+
+        # self.robot_arm = {
+        #     'pos-1_arm-8_dim': 1, 
+        #     'pos-2_arm-14_dim': 2,
+        #     'pos-2_arm-16_dim': 2,
+        # }
+
+        # self.robot_mapping = {
+        #     'franka': 0,
+        #     'lift2': 1,
+        #     'split_aloha': 1,
+        #     'aloha': 1,
+        #     'genie1': 2,
+        # }
 
         # Create mapping from (robot_type, control_mode, num_arms) to action type
         self.action_space_mapping = {
@@ -1543,13 +1575,11 @@ class ActionIndex:
 from transformers import AutoModelForCausalLM, AutoProcessor, AutoConfig, AutoTokenizer
 # from lerobot.policies.flower.utils import generate_policy_prompt, ActionIndex  # 避免circular import
 from torch.utils.data import default_collate
-# from lerobot.datasets.utils import ActionIndex, generate_policy_prompt
 class FlowerDataCollator:
-    def __init__(self, vlm_path='/mnt/data/daiwanqin/models/Florence-2-large', ):
+    def __init__(self, vlm_path='/mnt/data_ssd/share/models/Florence-2-large', ):
         self.processor = AutoProcessor.from_pretrained(vlm_path, trust_remote_code=True)
         self.tokenizer = self.processor.tokenizer
         self.action_space_index = ActionIndex()
- 
 
     def __call__(self, batch):
         task_batch = []
@@ -1602,56 +1632,74 @@ class FlowerDataCollator:
         batch_action_index = torch.tensor(batch_action_index)
         return text_prompts, batch_action_index
 
-# def construct_prompts(self, dataset_batch):
-#     language_instruction = dataset_batch["task"]
-#     text_prompts = []
-#     batch_action_index = []
-#     for idx, instruction in enumerate(language_instruction):
-#         if self.config.vlm_prompt_style == "default":
-#             # Original instruction only
-#             robot_type = dataset_batch['info']["robot_type"][idx]
-#             action_index = self.action_space_index.robot_mapping[robot_type]
-#             batch_action_index.append(action_index)
-#             instruction = generate_policy_prompt(
-#                 instruction,
-#                 robot_name=robot_type,
-#                 num_arms=self.action_space_index.get_num_arms(action_index),
-#                 action_space=f"{self.action_space_index.get_action_dim(action_index)}D continuous",
-#                 prompt_style="minimal",
-#                 include_meta=True
-#                 )
-#             text_prompts.append(instruction)
-#             # text_prompts.append(self.format_instruction(instruction))
-#         else:
-#             raise ValueError(f"Unknown prompt style: {self.config.vlm_prompt_style}")
-    
-#     batch_action_index = torch.tensor(batch_action_index)
-#     return text_prompts, batch_action_index
-
 
 from lerobot.utils.constants import OBS_IMAGES, OBS_STATE, ACTION, MAX_ACTION_DIM
 import torch.nn.functional as F
-def process_padding(batch, requires_padding=False):
-    if requires_padding:
-
-        horizon, action_dim = batch[ACTION].shape
-        if action_dim > MAX_ACTION_DIM:
-            raise ValueError(f"原始动作维度{action_dim}超过允许最大维度{MAX_ACTION_DIM}")
-
-        pad = MAX_ACTION_DIM - action_dim
-        pad_params = (0, pad) + (0, 0) * (batch[ACTION].ndim - 1)
-        batch[ACTION] = F.pad(batch[ACTION], pad_params, mode='constant', value=0.0)
-        batch[OBS_STATE] = F.pad(batch[OBS_STATE], pad_params, mode='constant', value=0.0)
-        batch[f'{ACTION}_mask'] = torch.ones(
-             MAX_ACTION_DIM,
-            device=batch[ACTION].device, dtype=torch.bool
+import random
+def construct_prompts(tasks, robot_types, action_space_index):
+    language_instruction = tasks
+    text_prompts = []
+    batch_action_index = []
+    for idx, instruction in enumerate(language_instruction):
+        # print(robot_types)    
+        robot_type = robot_types[idx]
+        action_index = action_space_index.robot_mapping[robot_type]
+        batch_action_index.append(action_index)
+        instruction = generate_policy_prompt(
+            instruction,
+            robot_name=robot_type,
+            num_arms=action_space_index.get_num_arms(action_index),
+            action_space=f"{action_space_index.get_action_dim(action_index)}D continuous",
+            prompt_style="minimal",
+            include_meta=True
             )
-        batch[f'{OBS_STATE}_mask'] = torch.ones(
-             MAX_ACTION_DIM,
-            device=batch[OBS_STATE].device, dtype=torch.bool
-            )
-        if pad > 0:
-            batch[f'{ACTION}_mask'][..., -pad:] = False
-            batch[f'{OBS_STATE}_mask'][..., -pad:] = False
+        text_prompts.append(instruction)
     
+    batch_action_index = torch.tensor(batch_action_index)
+    return text_prompts, batch_action_index
+
+
+def process_padding(batch, cfg):
+    bs, horizon, action_dim = batch[ACTION].shape
+    bs, horizon, state_dim = batch[OBS_STATE].shape
+    if action_dim > MAX_ACTION_DIM:
+        raise ValueError(f"原始动作维度{action_dim}超过允许最大维度{MAX_ACTION_DIM}")
+
+    action_pad = MAX_ACTION_DIM - action_dim
+    batch[ACTION] = F.pad(
+        batch[ACTION], 
+        (0, action_pad) + (0, 0) * (batch[ACTION].ndim - 1), 
+        mode='constant', 
+        value=0.0
+        )
+    state_pad = MAX_ACTION_DIM - state_dim
+    batch[OBS_STATE] = F.pad(
+        batch[OBS_STATE], 
+        (0, state_pad) + (0, 0) * (batch[OBS_STATE].ndim - 1), 
+        mode='constant', 
+        value=0.0
+        )
+    batch[f'{ACTION}_mask'] = torch.ones(
+        bs, MAX_ACTION_DIM,
+        device=batch[ACTION].device, dtype=torch.bool
+        )
+    batch[f'{OBS_STATE}_mask'] = torch.ones(
+        bs, MAX_ACTION_DIM,
+        device=batch[OBS_STATE].device, dtype=torch.bool
+        )
+    if action_pad > 0 or state_pad>0:
+        batch[f'{ACTION}_mask'][..., -action_pad:] = False
+        batch[f'{OBS_STATE}_mask'][..., -state_pad:] = False
+    
+    # images = []
+    # for key in cfg.image_features:
+    #     if key in batch.keys():
+    #         images.append(batch[key])
+    # batch[f'{cfg.cams}'] = random.choice(images)
+    # try:
+    #     target_key = f"{cfg.cams}"
+    #     batch[target_key] = batch['observation.images.rgb.head']
+    # except:
+    #     target_key = f"{cfg.cams}"
+    #     batch[target_key] = batch['observation.images.top']
     return batch
