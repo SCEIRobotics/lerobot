@@ -186,6 +186,11 @@ def save_scheduler_state(
 ) -> None:
     """Save scheduler state to disk.
 
+def save_scheduler_state(
+    scheduler: LRScheduler | dict[str, LRScheduler], save_dir: Path
+) -> None:
+    """Save scheduler state to disk.
+
     Args:
         scheduler: Either a single scheduler or a dictionary of schedulers.
         save_dir: Directory to save the scheduler state.
@@ -204,17 +209,6 @@ def save_scheduler_state(
 def save_single_scheduler_state(scheduler: LRScheduler, save_dir: Path) -> None:
     state_dict = scheduler.state_dict()
     write_json(state_dict, save_dir / SCHEDULER_STATE)
-
-# def save_scheduler_state(scheduler: LRScheduler | dict[LRScheduler], save_dir: Path) -> None:
-#     if isinstance(scheduler, dict):
-#         for name, sched in scheduler.items():
-#             scheduler_dir = save_dir / name
-#             scheduler_dir.mkdir(exist_ok=True, parents=True)
-#             state_dict = sched.state_dict()
-#             write_json(state_dict, scheduler_dir / SCHEDULER_STATE)
-#     else:
-#         state_dict = scheduler.state_dict()
-#         write_json(state_dict, save_dir / SCHEDULER_STATE)
 
 def load_scheduler_state(scheduler: LRScheduler | dict[str, LRScheduler], save_dir: Path) -> LRScheduler | dict[str, LRScheduler]:
     if isinstance(scheduler, dict):
