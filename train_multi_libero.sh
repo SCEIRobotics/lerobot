@@ -1,5 +1,5 @@
 #!/bin/bash
-# export CUDA_VISIBLE_DEVICES=1,3
+export CUDA_VISIBLE_DEVICES=3
 
 # export MUJOCO_GL=egl # 强制 MuJoCo 使用 EGL 渲染（关键）
 # export PYOPENGL_PLATFORM=egl # 禁用 GLFW 图形窗口（避免初始化错误）
@@ -10,12 +10,11 @@ export WANDB_MODE=offline  # 强制离线记录, 但是lerobot默认是online的
 export WANDB_API_KEY=7a17221f579b43949e05faf2a9120c5a6b6506e5
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 
-accelerate launch --config_file multi_gpu.yaml \
- ./src/lerobot/scripts/lerobot_train_multi.py \
-    --dataset.root=/vla-cd \
-    --dataset.repo_id=InternData-A1/test \
-    --dataset.root_val=/vla-cd/tensorflow_datasets_lerobot/aloha_sim_transfer_cube_scripted \
-    --dataset.repo_id_val=tensorflow_datasets_lerobot/aloha_sim_transfer_cube_scripted \
+python ./src/lerobot/scripts/lerobot_train_multi.py \
+    --dataset.root=/mnt/data_ssd/share/datasets/flower/libero \
+    --dataset.repo_id=flower/libero \
+    --dataset.root_val=/mnt/data_ssd/share/datasets/flower/libero \
+    --dataset.repo_id_val=flower/libero \
     --dataset.streaming=true \
     --dataset.requires_padding=true \
     --policy.type=flower \
@@ -24,12 +23,19 @@ accelerate launch --config_file multi_gpu.yaml \
     --policy.n_action_steps=60 \
     --policy.push_to_hub=false \
     --policy.device=cuda \
-    --batch_size=64 \
+    --batch_size=32 \
     --num_workers=4 \
-    --steps=800000 \
-    --save_freq=20000 \
-    --valid_freq=5000 \
-    --output_dir=/vla-cd/tmp/daiwanqin/train-a1-${TIMESTAMP} \
+    --steps=100000 \
+    --save_freq=10000 \
+    --valid_freq=-1 \
+    --output_dir=./outputs/train-libero-dataset-${TIMESTAMP} \
     --wandb.enable=true \
     --wandb.disable_artifact=true \
     --wandb.mode=offline \
+    --eval_freq=10000 \
+    --eval.n_episodes=50 \
+    --eval.batch_size=1 \
+    --env.type=libero \
+    --env.task=libero_goal \
+
+# --dataset.streaming=true \

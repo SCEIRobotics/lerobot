@@ -52,9 +52,11 @@ from lerobot.utils.utils import (
     init_logging,
 )
 from lerobot.utils.constants import OBS_IMAGES, OBS_STATE, ACTION, MAX_ACTION_DIM
+from lerobot.datasets.utils import process_padding
 import torch.nn.functional as F
 import gc
-
+import numpy as np
+import random
 
 def update_policy(
     train_metrics: MetricsTracker,
@@ -97,7 +99,7 @@ def update_policy(
 
     # Use accelerator's backward method
     accelerator.backward(loss)
-
+    # print(f"loss: {loss}")
     # Clip gradients if specified
     if grad_clip_norm > 0:
         grad_norm = accelerator.clip_grad_norm_(policy.parameters(), grad_clip_norm)
@@ -170,24 +172,52 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     #     cfg.dataset.root = roots
     # print(cfg.dataset.repo_id)
     # print(cfg.dataset.root)
-    if True:
+    if False:
         repo_ids = []
         roots = []
-        project_name = 'datasets' #'sim_lerobot' # lift2/franka interna1_merge_all
+        project_name = 'flower' #'sim_lerobot' # lift2/franka interna1_merge_all
         project_dir = f"{cfg.dataset.root}/{project_name}"
         repo_names = os.listdir(project_dir)
         for repo_name in repo_names:
-            if repo_name != 'aloha_sim_transfer_cube_scripted_train' and repo_name != 'aloha_sim_transfer_cube_scripted_val':
-                continue
-            repo_ids.append(f'{project_name}/{repo_name}')
-            roots.append(f'{project_dir}/{repo_name}')
+            if repo_name in [
+                # 'aloha_sim_transfer_cube_scripted_train_1',
+                # 'bc_z_gripper',
+                # 'cmu_play_fusion_lerobot',
+                # 'droid_1.0.1',
+                # 'robo_set_gripper',
+                'interna1_franka_processed_diff_merge',
+                'interna1_franka_processed_same_merge',
+                'interna1_genie1_processed_merge',
+                'interna1_lift2_processed_same_merge',
+                'interna1_split_aloha_processed_merge',
+                'libero',
+                'aloha_sim_transfer_cube_scripted',
+                ]:
+                repo_ids.append(f'{project_name}/{repo_name}')
+                roots.append(f'{project_dir}/{repo_name}')
+        # repo_ids.append(f'interna1_lift2_processed_diff/pick_beef_sandwich_on_conveyor')
+        # roots.append(f'/vla-cd/interna1_merge_all/interna1_lift2_processed_diff/pick_beef_sandwich_on_conveyor')
+        # repo_ids.append(f'tensorflow_datasets_lerobot/aloha_sim_transfer_cube_scripted')
+        # roots.append(f'/vla-cd/tensorflow_datasets_lerobot/aloha_sim_transfer_cube_scripted')
+        
+            # if repo_name in [
+            #     'aloha_sim_transfer_cube_scripted_val_1',
+            #     'bc_z_gripper_val',
+            #     'cmu_play_fusion_lerobot_val',
+            #     'droid_1.0.1_val',
+            #     'robo_set_gripper_val',
+            #     ]:
+            #     repo_ids_val.append(f'{project_name}/{repo_name}')
+            #     roots_val.append(f'{project_dir}/{repo_name}')
         cfg.dataset.repo_id = repo_ids
         cfg.dataset.root = roots
-        cfg.dataset.root_val = roots
     
+    cfg.dataset.repo_id = [cfg.dataset.repo_id]
+    cfg.dataset.root = [cfg.dataset.root]
     print(cfg.dataset.repo_id)
     print(cfg.dataset.root)
     print(cfg.dataset.root_val)
+    print(cfg.dataset.repo_id_val)
 
     cfg.validate()
     # import pdb; pdb.set_trace()
@@ -206,7 +236,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         accelerator = Accelerator(
             step_scheduler_with_optimizer=False, 
             # dataloader_config=dataloader_config,
-            gradient_accumulation_steps=4,
+            # gradient_accumulation_steps=4,
             kwargs_handlers=[ddp_kwargs])
 
     init_logging(accelerator=accelerator)
@@ -252,6 +282,12 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     # Create environment used for evaluating checkpoints during training on simulation data.
     # On real-world data, no need to create an environment as evaluations are done outside train.py,
     # using the eval.py instead, with gym_dora environment and dora-rs.
+    eval_env = None
+    if cfg.eval_freq > 0 and cfg.env is not None:
+        if is_main_process:
+            logging.info("Creating env")
+        eval_env = make_env(cfg.env, n_envs=cfg.eval.batch_size, use_async_envs=cfg.eval.use_async_envs)
+
     if is_main_process:
         logging.info("Creating policy")
     
@@ -264,6 +300,43 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
 
     # Wait for all processes to finish policy creation before continuing
     accelerator.wait_for_everyone()
+
+    # Create processors - only provide dataset_stats if not resuming from saved processors
+    preprocessor, postprocessor = [], []
+    for sub_idx in range(len(datasets)):
+        processor_kwargs={}
+        postprocessor_kwargs={}
+        processor_kwargs["dataset_stats"] = datasets[sub_idx].meta.stats
+        if cfg.dataset.use_imagenet_stats:
+            from lerobot.datasets.factory import IMAGENET_STATS
+            for key in datasets[sub_idx].meta.camera_keys:
+                for stats_type, stats in IMAGENET_STATS.items():
+                    datasets[sub_idx].meta.stats[key][stats_type] = torch.tensor(stats, dtype=torch.float32)
+
+        pre, post = make_pre_post_processors(
+            policy_cfg=cfg.policy,
+            pretrained_path=None,
+            **processor_kwargs,
+            **postprocessor_kwargs,
+        )
+        preprocessor.append(pre)
+        postprocessor.append(post)
+    
+    val_processor_kwargs={}
+    val_postprocessor_kwargs={}
+    val_processor_kwargs["dataset_stats"] = val_datasets.meta.stats
+    if cfg.dataset.use_imagenet_stats:
+        from lerobot.datasets.factory import IMAGENET_STATS
+        for key in val_datasets.meta.camera_keys:
+            for stats_type, stats in IMAGENET_STATS.items():
+                val_datasets.meta.stats[key][stats_type] = torch.tensor(stats, dtype=torch.float32)
+
+    val_processor, val_postprocessor = make_pre_post_processors(
+        policy_cfg=cfg.policy,
+        pretrained_path=None,
+        **val_processor_kwargs,
+        **val_postprocessor_kwargs,
+    )
 
     if is_main_process:
         logging.info("Creating optimizer and scheduler")
@@ -282,7 +355,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         if cfg.env is not None:
             logging.info(f"{cfg.env.task=}")
             logging.info("Creating environment processors")
-            env_preprocessor, env_postprocessor = make_env_pre_post_processors(env_cfg=cfg.env)
+            env_preprocessor, env_postprocessor = make_env_pre_post_processors(env_cfg=cfg.env, policy_cfg=cfg.policy)
+            # import pdb; pdb.set_trace()
         logging.info(f"{cfg.steps=} ({format_big_number(cfg.steps)})")
         logging.info(f"{sum([dataset.num_frames for dataset in datasets])=} ({format_big_number(sum([dataset.num_frames for dataset in datasets]))})")
         logging.info(f"{sum([dataset.num_episodes for dataset in datasets])=}")
@@ -296,14 +370,12 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     # create dataloader for offline training
     shuffle = True
     sampler = None
-    if not cfg.dataset.streaming:
-        raise NotImplementedError("Multi-dataset training is just supported for streaming.")
-    
-    # from lerobot.datasets.streaming_dataset import MixedIterableDataset 
-    # from lerobot.datasets.utils import FlowerDataCollator
-    # from torch.utils.data import ChainDataset
-    # ratios = cfg.policy.dataset_ratios or [1.0] * len(datasets)
-    # mix_dataset = MixedIterableDataset(datasets, ratios)
+    # if not cfg.dataset.streaming:
+    #     raise NotImplementedError("Multi-dataset training is just supported for streaming.")   
+    from lerobot.datasets.streaming_dataset import MixedIterableDataset 
+    from lerobot.datasets.utils import FlowerDataCollator
+    from torch.utils.data import ChainDataset, ConcatDataset
+    # mix_dataset = MixedIterableDataset(datasets)
     # mix_dataset = ChainDataset(datasets)
     # dataloader = torch.utils.data.DataLoader(
     #     mix_dataset,
@@ -316,17 +388,14 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     #     drop_last=True,
     #     prefetch_factor=2 if cfg.num_workers > 0 else None,
     #     )
-    from lerobot.datasets.utils import FlowerDataCollator
     dataloaders_ = []
     sample_weights = []
     dataset_sizes = []
-    # sample_weights = np.array(sample_weights) * np.array(dataset_sizes)
-    # sample_weights = np.array(sample_weights) / np.sum(sample_weights)
-    import numpy as np
+    import pdb; pdb.set_trace()
     for sub_idx in range(len(datasets)):
         dataloader = torch.utils.data.DataLoader(
             datasets[sub_idx],
-            num_workers=cfg.num_workers,
+            num_workers=cfg.num_workers, #datasets[sub_idx].num_shards, #cfg.num_workers,
             batch_size=cfg.batch_size,
             shuffle=shuffle and not cfg.dataset.streaming,
             sampler=sampler,
@@ -340,12 +409,12 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         dataset_sizes.append(datasets[sub_idx].meta.total_frames)
     sample_weights = np.array(sample_weights) * np.array(dataset_sizes)
     sample_weights = np.array(sample_weights) / np.sum(sample_weights)
-    # import pdb; pdb.set_trace()
-
-    from torch.utils.data import ConcatDataset
-    val_mix_dataset = ConcatDataset(val_datasets)
+    print(f'dataset_sizes: {dataset_sizes}')
+    print(f'sample_weights: {sample_weights}')
+    init_list = [idx for idx in range(len(dataloaders_))]
+    # val_mix_dataset = ConcatDataset(val_datasets)
     val_dataloader = torch.utils.data.DataLoader(
-        val_mix_dataset,
+        val_datasets,
         num_workers=cfg.num_workers,
         batch_size=cfg.batch_size,
         shuffle=False,
@@ -358,13 +427,30 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
 
     # Prepare everything with accelerator
     accelerator.wait_for_everyone()
+    # accelerator暂时不支持non-tensor的IterableDataset:
     dataloaders = []
     for dataloader in dataloaders_:
         dataloader = accelerator.prepare(dataloader)
         dataloaders.append(dataloader)
-    policy, optimizer, lr_scheduler, val_dataloader = accelerator.prepare(
-        policy, optimizer, lr_scheduler, val_dataloader
-    )
+    
+    # policy, optimizer, lr_scheduler, val_dataloader = accelerator.prepare(
+    #     policy, optimizer, lr_scheduler, val_dataloader
+    # )
+    # policy = accelerator.unwrap_model(policy)
+    val_dataloader = accelerator.prepare(val_dataloader)
+    policy = accelerator.prepare(policy)
+    if isinstance(optimizer, dict):
+        for key, opt in optimizer.items():
+            optimizer[key] = accelerator.prepare(opt)
+    else:
+        optimizer = accelerator.prepare(optimizer)
+    if isinstance(lr_scheduler, dict):
+        for key, sch in lr_scheduler.items():
+            lr_scheduler[key] = accelerator.prepare(sch)
+    else:
+        lr_scheduler = accelerator.prepare(lr_scheduler)
+
+    # dl_iter = cycle(dataloader)
     dl_iters = [cycle(dl) for dl in dataloaders]
     policy.train()
 
@@ -389,20 +475,19 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
 
     if is_main_process:
         logging.info("Start offline training on a fixed dataset")
-
+    print(f'start training ... ...')
     for batch_idx in range(step, cfg.steps):
         with accelerator.accumulate(policy):
             start_time = time.perf_counter()
             st = time.time()
-            import random
+            
             dataloader_idx = random.choices(range(len(dataloaders)), weights=sample_weights)[0]
+            if len(init_list)>0:
+                dataloader_idx = init_list.pop()
+            # print(f'dataloader_idx: {dataloader_idx}')
             batch = next(dl_iters[dataloader_idx])
-            batch = {
-                k: v.to(cfg.policy.device, non_blocking=True) 
-                if isinstance(v, torch.Tensor)
-                else v 
-                for k, v in batch.items()
-            }
+            batch = preprocessor[dataloader_idx](batch) 
+            batch = process_padding(batch, cfg.policy)
             train_tracker.dataloading_s = time.perf_counter() - start_time
             pt = time.time()
             train_tracker, output_dict = update_policy(
@@ -415,7 +500,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                 lr_scheduler=lr_scheduler,
             )
             ut = time.time()
-            print(f"use dataloader_idx: {dataloader_idx}, dataloading_s: {pt-st:.3f}, update_s: {ut - pt:.3f}")
+            # print(f"dataloading_s: {pt-st:.3f}, update_s: {ut - pt:.3f}")
         # Note: eval and checkpoint happens *after* the `step`th training update has completed, so we
         # increment `step` here.
         # flower pret没有选择在同步梯度的时候更新step
@@ -427,22 +512,26 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         is_valid_step = cfg.valid_freq > 0 and step % cfg.valid_freq == 0
 
         if is_valid_step:
+            vt = time.time()
             policy.eval()
             val_loss = 0
-            for vla_idx, val_batch in enumerate(val_dataloader):
-                if vla_idx >= 10:
-                    break
-                loss = policy.validate_action(val_batch)
-                val_loss += loss.item()
-            print(f"val_loss: {loss.item():.3f}")
-            # val_loss /= len(val_dataloader)
+            for val_idx, val_batch in enumerate(val_dataloader):
+                # if vla_idx >= 10:
+                #     break
+                val_batch = val_processor(val_batch)
+                val_batch = process_padding(val_batch, cfg.policy)
 
-            val_loss /= (val_dataloader+1)
-            print(val_loss)
-            logging.info(f"val_loss: {val_loss:.3f}")
+                p = accelerator.unwrap_model(policy)         
+                loss = p.validate_action(val_batch)
+                val_loss += loss.item()
+            val_loss /= len(val_dataloader)
+            logging.info(f"step {step}, val_loss: {val_loss:.3f}")
             policy.train()
+            et = time.time()
+            print(f"eval_s: {et-vt:.3f}")
 
         if is_log_step:
+            logging.info(f"dataloading_s: {pt-st:.3f}, update_s: {ut - pt:.3f}")
             logging.info(train_tracker)
             if wandb_logger:
                 wandb_log_dict = train_tracker.to_dict()
@@ -464,12 +553,67 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                     policy=accelerator.unwrap_model(policy),
                     optimizer=optimizer,
                     scheduler=lr_scheduler,
+                    preprocessor=preprocessor[0],
+                    postprocessor=postprocessor[0],
+
                 )
                 update_last_checkpoint(checkpoint_dir)
                 if wandb_logger:
                     wandb_logger.log_policy(checkpoint_dir)
 
             accelerator.wait_for_everyone()
+
+        if cfg.env and is_eval_step:
+            if is_main_process:
+                step_id = get_step_identifier(step, cfg.steps)
+                logging.info(f"Eval policy at step {step}")
+                with torch.no_grad(), accelerator.autocast():
+                    eval_info = eval_policy_all(
+                        envs=eval_env,  # dict[suite][task_id] -> vec_env
+                        policy=accelerator.unwrap_model(policy),
+                        env_preprocessor=env_preprocessor,
+                        env_postprocessor=env_postprocessor,
+                        preprocessor=preprocessor[0],
+                        postprocessor=postprocessor[0],
+                        n_episodes=cfg.eval.n_episodes,
+                        videos_dir=cfg.output_dir / "eval" / f"videos_step_{step_id}",
+                        max_episodes_rendered=4,
+                        start_seed=cfg.seed,
+                        max_parallel_tasks=cfg.env.max_parallel_tasks,
+                    )
+                # overall metrics (suite-agnostic)
+                aggregated = eval_info["overall"]
+
+                # optional: per-suite logging
+                for suite, suite_info in eval_info.items():
+                    logging.info("Suite %s aggregated: %s", suite, suite_info)
+
+                # meters/tracker
+                eval_metrics = {
+                    "avg_sum_reward": AverageMeter("∑rwrd", ":.3f"),
+                    "pc_success": AverageMeter("success", ":.1f"),
+                    "eval_s": AverageMeter("eval_s", ":.3f"),
+                }
+                eval_tracker = MetricsTracker(
+                    cfg.batch_size,
+                    datasets[0].num_frames,
+                    datasets[0].num_episodes,
+                    eval_metrics,
+                    initial_step=step,
+                    accelerator=accelerator,
+                )
+                eval_tracker.eval_s = aggregated.pop("eval_s")
+                eval_tracker.avg_sum_reward = aggregated.pop("avg_sum_reward")
+                eval_tracker.pc_success = aggregated.pop("pc_success")
+                if wandb_logger:
+                    wandb_log_dict = {**eval_tracker.to_dict(), **eval_info}
+                    wandb_logger.log_dict(wandb_log_dict, step, mode="eval")
+                    wandb_logger.log_video(eval_info["overall"]["video_paths"][0], step, mode="eval")
+
+            accelerator.wait_for_everyone()
+
+    if eval_env:
+        close_envs(eval_env)
 
     if is_main_process:
         logging.info("End of training")

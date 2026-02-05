@@ -181,17 +181,24 @@ class CosineDecayWithWarmupSchedulerConfig(LRSchedulerConfig):
 
         return LambdaLR(optimizer, lr_lambda, -1)
 
+def save_scheduler_state(
+    scheduler: LRScheduler | dict[str, LRScheduler], save_dir: Path
+) -> None:
+    """Save scheduler state to disk.
 
-def save_scheduler_state(scheduler: LRScheduler | dict[LRScheduler], save_dir: Path) -> None:
+    Args:
+        scheduler: Either a single scheduler or a dictionary of schedulers.
+        save_dir: Directory to save the scheduler state.
+    """
     if isinstance(scheduler, dict):
+        # Handle dictionary of schedulers
         for name, sched in scheduler.items():
             scheduler_dir = save_dir / name
             scheduler_dir.mkdir(exist_ok=True, parents=True)
-            state_dict = sched.state_dict()
-            write_json(state_dict, scheduler_dir / SCHEDULER_STATE)
+            save_single_scheduler_state(sched, scheduler_dir)
     else:
-        state_dict = scheduler.state_dict()
-        write_json(state_dict, save_dir / SCHEDULER_STATE)
+        # Handle single scheduler
+        save_single_scheduler_state(scheduler, save_dir)
 
 def load_scheduler_state(scheduler: LRScheduler | dict[str, LRScheduler], save_dir: Path) -> LRScheduler | dict[str, LRScheduler]:
     if isinstance(scheduler, dict):
@@ -208,6 +215,39 @@ def load_scheduler_state(scheduler: LRScheduler | dict[str, LRScheduler], save_d
         # Handle single scheduler 
         return load_single_scheduler_state(scheduler, save_dir)
 
+<<<<<<< HEAD
+=======
+def save_single_scheduler_state(scheduler: LRScheduler, save_dir: Path) -> None:
+    state_dict = scheduler.state_dict()
+    write_json(state_dict, save_dir / SCHEDULER_STATE)
+
+# def save_scheduler_state(scheduler: LRScheduler | dict[LRScheduler], save_dir: Path) -> None:
+#     if isinstance(scheduler, dict):
+#         for name, sched in scheduler.items():
+#             scheduler_dir = save_dir / name
+#             scheduler_dir.mkdir(exist_ok=True, parents=True)
+#             state_dict = sched.state_dict()
+#             write_json(state_dict, scheduler_dir / SCHEDULER_STATE)
+#     else:
+#         state_dict = scheduler.state_dict()
+#         write_json(state_dict, save_dir / SCHEDULER_STATE)
+
+def load_scheduler_state(scheduler: LRScheduler | dict[str, LRScheduler], save_dir: Path) -> LRScheduler | dict[str, LRScheduler]:
+    if isinstance(scheduler, dict):
+        # Handle dictionary of schedulers
+        loaded_schedulers = {}
+        for name, sched in scheduler.items():
+            scheduler_dir = save_dir / name
+            if scheduler_dir.exists():
+                loaded_schedulers[name] = load_single_scheduler_state(sched, scheduler_dir)
+            else:
+                loaded_schedulers[name] = sched
+        return loaded_schedulers
+    else:
+        # Handle single scheduler 
+        return load_single_scheduler_state(scheduler, save_dir)
+
+>>>>>>> 4f310f9 (验证stream dataset)
 def load_single_scheduler_state(scheduler: LRScheduler | dict[str, LRScheduler], save_dir: Path) -> LRScheduler | dict[str, LRScheduler]:
     state_dict = deserialize_json_into_object(save_dir / SCHEDULER_STATE, scheduler.state_dict())
     scheduler.load_state_dict(state_dict)

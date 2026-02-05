@@ -79,6 +79,38 @@ from lerobot.utils.constants import HF_LEROBOT_HOME
 CODEBASE_VERSION = "v3.0"
 from lerobot.datasets.utils import process_padding
 import torchvision
+import random
+dataset_weight = {
+    "bridge_dataset": 4.2,
+    "fractal20220817_data": 2.2,
+    "dobbe": 2.0,
+    "bc_z_gripper": 0.8,
+    "cmu_play_fusion_lerobot": 6.0,
+    "libero_10_no_noops": 16.0,
+    "libero_goal_no_noops": 16.0,
+    # ("fmb", 1.0),
+    # ("stanford_hydra_dataset_converted_externally_to_rlds", 6.0),
+    # JOINT STATE
+    "droid_1.0.1": 0.45,
+    "robo_set_gripper": 3.0,
+    # ("kit_irl_real_kitchen_lang", 24.0),
+    # BIMANUAL JOINT
+    # ("aloha_play_dataset", 4.0),
+    # ("aloha_mobile", 6.0),
+    'aloha_sim_transfer_cube_scripted_train_1': 1.0,
+    'aloha_sim_transfer_cube_scripted_val_1': 1.0,
+    'aloha_sim_transfer_cube_scripted': 1.0,
+
+    'interna1_franka_processed_diff_merge': 1.0,
+    'interna1_franka_processed_same_merge': 1.0,
+    'interna1_genie1_processed_merge': 1.0,
+    'interna1_lift2_processed_same_merge': 1.0,
+    'interna1_split_aloha_processed_merge': 1.0,
+    'pick_beef_sandwich_on_conveyor': 1.0,
+    'aloha_sim_transfer_cube_scripted': 100,
+    'libero': 1.0,
+}
+
 
 class LeRobotDatasetMetadata:
     def __init__(
@@ -680,6 +712,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         super().__init__()
         self.repo_id = repo_id
         self.root = Path(root) if root else HF_LEROBOT_HOME / repo_id
+        self.cfg = cfg
         self.image_transforms = image_transforms
         self.delta_timestamps = delta_timestamps
         self.episodes = episodes
@@ -703,7 +736,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self.meta = LeRobotDatasetMetadata(
             self.repo_id, self.root, self.revision, force_cache_sync=force_cache_sync
         )
-        
+        self.weight = dataset_weight[self.repo_id.split("/")[-1]]
         # Track dataset state for efficient incremental writing
         self._lazy_loading = False
         self._recorded_frames = self.meta.total_frames
@@ -738,16 +771,17 @@ class LeRobotDataset(torch.utils.data.Dataset):
         if self.delta_timestamps is not None:
             check_delta_timestamps(self.delta_timestamps, self.fps, self.tolerance_s)
             self.delta_indices = get_delta_indices(self.delta_timestamps, self.fps)
-        processor_kwargs={}
-        postprocessor_kwargs={}
-        processor_kwargs["dataset_stats"] = self.meta.stats
-        from lerobot.policies.factory import make_pre_post_processors
-        self.pre, _ = make_pre_post_processors(
-            policy_cfg=cfg,
-            pretrained_path=None,
-            **processor_kwargs,
-            **postprocessor_kwargs,
-        )
+        if cfg is not None:
+            processor_kwargs={}
+            postprocessor_kwargs={}
+            processor_kwargs["dataset_stats"] = self.meta.stats
+            from lerobot.policies.factory import make_pre_post_processors
+            self.pre, _ = make_pre_post_processors(
+                policy_cfg=cfg,
+                pretrained_path=None,
+                **processor_kwargs,
+                **postprocessor_kwargs,
+            )
         self.resize = torchvision.transforms.Resize((cfg.resize_h, cfg.resize_w))
 
     def _close_writer(self) -> None:
@@ -1074,10 +1108,25 @@ class LeRobotDataset(torch.utils.data.Dataset):
         valid_robots = ['franka','lift2', 'split_aloha', 'genie1']
         for robot in valid_robots:
             if robot in str(self.repo_id):
-                item['info']['robot_type'] = robot
+                item['robot_type'] = robot
                 break
-        item = self.pre(item)
-        item = process_padding(item, requires_padding=True)
+        # item = self.pre(item)
+        # item = process_padding(item)
+
+        # # 仅加载必要的视频帧
+        # keys = [
+        #     'action', 'action_is_pad', 'action_mask',
+        #     'observation.state', 'observation.state_is_pad', 'observation.state_mask',
+        #     'task', 'valid', 'robot_type',
+        # ]
+        # new_result = {k: item[k] for k in keys}
+
+        # images = []
+        # for key in self.cfg.image_features:
+        #     if key in item.keys():
+        #         images.append(item[key])
+        # new_result[f'{self.cfg.cams}'] = random.choice(images)
+        # return new_result
         return item
     
     def __repr__(self):

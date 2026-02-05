@@ -40,6 +40,8 @@ from lerobot.datasets.video_utils import (
 from lerobot.utils.constants import HF_LEROBOT_HOME, LOOKAHEAD_BACKTRACKTABLE, LOOKBACK_BACKTRACKTABLE
 from lerobot.datasets.utils import process_padding
 import torchvision
+import random
+from itertools import cycle
 
 CROSS_X_MIX = [
     # DELTA EEF
@@ -77,8 +79,18 @@ dataset_weight = {
     # BIMANUAL JOINT
     # ("aloha_play_dataset", 4.0),
     # ("aloha_mobile", 6.0),
-    'aloha_sim_transfer_cube_scripted_train': 1.0,
-    'aloha_sim_transfer_cube_scripted_val': 1.0,
+    'aloha_sim_transfer_cube_scripted_train_1': 1.0,
+    'aloha_sim_transfer_cube_scripted_val_1': 1.0,
+    'aloha_sim_transfer_cube_scripted': 1.0,
+
+    'interna1_franka_processed_diff_merge': 1.0,
+    'interna1_franka_processed_same_merge': 1.0,
+    'interna1_genie1_processed_merge': 1.0,
+    'interna1_lift2_processed_same_merge': 1.0,
+    'interna1_split_aloha_processed_merge': 1.0,
+    'pick_beef_sandwich_on_conveyor': 1.0,
+    'aloha_sim_transfer_cube_scripted': 100,
+    'libero': 1.0,
 }
 
 class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
@@ -159,6 +171,7 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         super().__init__()
         self.repo_id = repo_id
         self.root = Path(root) if root else HF_LEROBOT_HOME / repo_id
+        self.cfg = cfg
         self.streaming_from_local = root is not None
         self.sub_idx = sub_idx
         self.image_transforms = image_transforms
@@ -170,7 +183,8 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         self.shuffle = shuffle
 
         self.streaming = streaming
-        self.buffer_size = 10
+        self.buffer_size = buffer_size
+        print(self.buffer_size)
 
         # We cache the video decoders to avoid re-initializing them at each frame (avoiding a ~10x slowdown)
         self.video_decoder_cache = None
@@ -211,16 +225,16 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
 
         self.num_shards = min(self.hf_dataset.num_shards, max_num_shards)
 
-        processor_kwargs={}
-        postprocessor_kwargs={}
-        processor_kwargs["dataset_stats"] = self.meta.stats
-        from lerobot.policies.factory import make_pre_post_processors
-        self.pre, _ = make_pre_post_processors(
-            policy_cfg=cfg,
-            pretrained_path=None,
-            **processor_kwargs,
-            **postprocessor_kwargs,
-        )
+        # processor_kwargs={}
+        # postprocessor_kwargs={}
+        # processor_kwargs["dataset_stats"] = self.meta.stats
+        # from lerobot.policies.factory import make_pre_post_processors
+        # self.pre, _ = make_pre_post_processors(
+        #     policy_cfg=cfg,
+        #     pretrained_path=None,
+        #     **processor_kwargs,
+        #     **postprocessor_kwargs,
+        # )
         self.resize = torchvision.transforms.Resize((cfg.resize_h, cfg.resize_w))
 
     def __len__(self):
@@ -266,8 +280,8 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         idx_to_backtrack_dataset = {
             idx: self._make_backtrackable_dataset(safe_shard(self.hf_dataset, idx, self.num_shards))
             for idx in range(self.num_shards)
-        }
-
+        } # 把数据集分成多个分片
+        # import pdb; pdb.set_trace()
         # This buffer is populated while iterating on the dataset's shards
         # the logic is to add 2 levels of randomness:
         # (1) sample one shard at random from the ones available, and
@@ -275,10 +289,10 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         frames_buffer = []
         while available_shards := list(idx_to_backtrack_dataset.keys()):
             shard_key = next(self._infinite_generator_over_elements(rng, available_shards))
-            backtrack_dataset = idx_to_backtrack_dataset[shard_key]  # selects which shard to iterate on
-
+            backtrack_dataset = idx_to_backtrack_dataset[shard_key]  # selects which shard to iterate on 每次随机选择一个分片
             try:
                 for frame in self.make_frame(backtrack_dataset):
+                    # 先填1000帧，填满后再随机采样
                     if len(frames_buffer) == self.buffer_size:
                         i = next(buffer_indices_generator)  # samples a element from the buffer
                         yield frames_buffer[i]
@@ -422,8 +436,28 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
             if robot in str(self.repo_id):
                 result['robot_type'] = robot
                 break
-        result = self.pre(result)
-        result = process_padding(result, requires_padding=True)
+        
+        # result = self.pre(result)
+        # result = process_padding(result)
+
+        # # 仅加载必要的视频帧
+        # keys = [
+        #     'action', 'action_is_pad', 'action_mask',
+        #     'observation.state', 'observation.state_is_pad', 'observation.state_mask',
+        #     'task', 'valid', 'robot_type',
+        # ]
+        # new_result = {k: result[k] for k in keys}
+        # images = []
+        # for key in self.cfg.image_features:
+        #     if key in result.keys():
+        #         images.append(result[key])
+        # new_result[f'{self.cfg.cams}'] = random.choice(images)
+        # yield new_result
+        # print(f'before: {result['robot_type']}')
+        keys_to_del = [key for key in result.keys() if isinstance(result[key], str) and key!="task" and key!="robot_type"]
+        for key in keys_to_del:
+            del result[key]
+        # print(f'after: {result['robot_type']}')
         yield result
 
     def _get_query_timestamps(
@@ -437,6 +471,7 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         for key in self.meta.video_keys:
             if query_indices is not None and key in query_indices:
                 timestamps = keys_to_timestamps[key]
+                timestamps = [ts + episode_boundaries_ts[key][0] for ts in timestamps]
                 # Clamp out timesteps outside of episode boundaries
                 query_timestamps[key] = torch.clamp(
                     torch.tensor(timestamps), *episode_boundaries_ts[key]
@@ -607,15 +642,19 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
             )
 
 
-import random
-from itertools import cycle
-class MixedIterableDataset:
-    def __init__(self, datasets: List[torch.utils.data.IterableDataset], ratios: List[float]):
-        assert len(datasets) == len(ratios), "datasets 和 ratios 的长度必须相同"
-        assert all(r > 0 for r in ratios), "ratios 中的值必须为正数"
+class MixedIterableDataset(torch.utils.data.IterableDataset):
+    def __init__(self, datasets: List[torch.utils.data.IterableDataset]):
         self.datasets = datasets
-        self.ratios = ratios
-        print(self.datasets)
+        sample_weights = []
+        dataset_sizes = []
+        for dataset in datasets:
+            sample_weights.append(dataset.weight)
+            dataset_sizes.append(dataset.meta.total_frames)
+        sample_weights = np.array(sample_weights) * np.array(dataset_sizes)
+        sample_weights = np.array(sample_weights) / np.sum(sample_weights)
+        self.sample_weights = sample_weights
+        self.dataset_sizes = sum(dataset_sizes)
+        self._iterator = self.__iter__()
 
     def __iter__(self):
         iterators = [cycle(dataset) for dataset in self.datasets]
@@ -623,36 +662,89 @@ class MixedIterableDataset:
         while True:
             dataset_idx = random.choices(
                 range(len(self.datasets)), 
-                weights=self.ratios, 
-                k=1
-            )[0]
-            yield next(iterators[dataset_idx])
-
-import random
-from itertools import cycle, islice
-from typing import List
-import torch
-
-class MixedIterableDataset(torch.utils.data.IterableDataset):
-    def __init__(self, datasets: List[torch.utils.data.IterableDataset], ratios: List[float]):
-        assert len(datasets) == len(ratios), "datasets 和 ratios 的长度必须相同"
-        assert all(r > 0 for r in ratios), "ratios 中的值必须为正数"
-        self.datasets = datasets
-        self.ratios = ratios
-
-    def __iter__(self):
-        # 创建每个子数据集的迭代器
-        iterators = [iter(dataset) for dataset in self.datasets]
-
-        while True:
-            # 按照给定的权重随机选择一个子数据集
-            dataset_idx = random.choices(
-                range(len(self.datasets)), 
-                weights=self.ratios, 
+                weights=self.sample_weights, 
                 k=1
             )[0]
             try:
                 yield next(iterators[dataset_idx])
             except StopIteration:
-                iterators[dataset_idx] = iter(self.datasets[dataset_idx])
-                print(f"子数据集 {dataset_idx} 迭代器已重新创建")
+                    iterators[dataset_idx] = cycle(self.datasets[dataset_idx])
+                    yield next(iterators[dataset_idx])
+    
+    def __len__(self):
+        return self.dataset_sizes
+
+
+if __name__=="__main__":
+    from lerobot.configs import parser
+    from lerobot.configs.train import TrainPipelineConfig
+    from lerobot.configs.default import DatasetConfig
+    from lerobot.configs.policies import PreTrainedConfig
+    from lerobot.policies.flower.configuration_flower import FlowerConfig
+    from lerobot.datasets.utils import FlowerDataCollator
+    from types import SimpleNamespace
+    hf_dataset: datasets.IterableDataset = load_dataset(
+                '/mnt/data_ssd/share/datasets/aloha_sim_transfer_cube_scripted',
+                split="train",
+                streaming=True,
+                data_files="data/*/*.parquet",
+            )
+    hf_dataset = hf_dataset.shuffle(buffer_size=10_000, seed=42)
+    # print(hf_dataset[0])
+    # print(next(iter(hf_dataset)))
+    # import pdb; pdb.set_trace()
+    policy = {
+        'action_delta_indices': list(range(0, 64)),
+        'observation_delta_indices': list(range(0, 1)),
+        'type': 'flower',
+        'resize_h': 224,
+        'resize_w': 224,
+    }
+    policy_cfg = SimpleNamespace(**policy)
+    # policy_cfg = FlowerConfig()
+    # ds1 = StreamingLeRobotDataset(
+    #             'datasets/aloha_sim_transfer_cube_scripted',
+    #             root='/mnt/data_ssd/share/datasets/aloha_sim_transfer_cube_scripted_train',
+    #             cfg=policy_cfg,
+    #             max_num_shards=1,
+    #         )
+    # ds2 = StreamingLeRobotDataset(
+    #             'datasets/aloha_sim_transfer_cube_scripted',
+    #             root='/mnt/data_ssd/share/datasets/aloha_sim_transfer_cube_scripted_val',
+    #             cfg=policy_cfg,
+    #             max_num_shards=1,
+    #         )
+    # mixed_ds = MixedIterableDataset([ds1, ds2])
+    mixed_ds = StreamingLeRobotDataset(
+        'datasets/aloha_sim_transfer_cube_scripted',
+        root='/mnt/data_ssd/share/datasets/InternData-A1/interna1_merge_all/interna1_split_aloha_processed_merge',
+        cfg=policy_cfg,
+        max_num_shards=1,
+    )
+    mixed_dataloader = torch.utils.data.DataLoader(
+        mixed_ds,
+        num_workers=0,
+        batch_size=32,
+        shuffle=False,
+        sampler=None,
+        # collate_fn=FlowerDataCollator(),
+        pin_memory=True,
+        
+        drop_last=False,
+        # persistent_workers=True,
+        # prefetch_factor=2,
+        # worker_init_fn=lambda _: random.seed(torch.initial_seed() % 2**32)
+        )
+    dl_iters = cycle(mixed_dataloader)
+    print(len(mixed_ds))
+    # import pdb; pdb.set_trace()
+    for i in range(100000):
+        import time
+        start_time = time.time()
+        # print(f"batch {i} ...")
+        batch = next(dl_iters)
+        end_time = time.time()
+        # print(f"batch {i} time: {end_time - start_time}")
+        # import pdb; pdb.set_trace()
+
+    
