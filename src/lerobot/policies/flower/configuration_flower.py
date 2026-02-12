@@ -56,7 +56,7 @@ class FlowerConfig(PreTrainedConfig):
     # optimizer_betas=(0.9, 0.95)
     # optimizer_eps=1e-8
 
-    # sft:
+    # # sft:
     # optimizer_weight_decay=0.05
     # optimizer_betas=(0.9, 0.95)
     # optimizer_eps=1e-8
@@ -75,22 +75,15 @@ class FlowerConfig(PreTrainedConfig):
     beta_vlm = (0.9, 0.99)
 
     weight_decay = {"transformer_weight_decay": 0.1, "vlm_weight_decay": 1e-9}
-    dit_lr_scheduler = {"init_lr_scale": 0.1, "final_lr_scale": 0.1, "phase_ratio": "(0.01, 0.39, 0.6)", "total_steps": 600000}
-    vlm_lr_scheduler = {"init_lr_scale": 0.01, "final_lr_scale": 0.1, "phase_ratio": "(0.1, 0.3, 0.6)", "total_steps": 600000}
-
-    # init_lr=2e-5
-    # init_lr_scale=0.1
-    # final_lr_scale=0.5
-    # total_steps=50000  # 经过total_steps，lr从init_lr_scale*init_lr到final_lr_scale*init_lr
-    # phase_ratio="(0.05, 0.1, 0.85)"
-    # lr=2e-5
+    dit_lr_scheduler = {"init_lr_scale": 0.1, "final_lr_scale": 0.1, "phase_ratio": "(0.01, 0.39, 0.6)", "total_steps": 2400000}
+    vlm_lr_scheduler = {"init_lr_scale": 0.01, "final_lr_scale": 0.1, "phase_ratio": "(0.1, 0.3, 0.6)", "total_steps": 2400000}
 
     # flower:
     # VLM Configuration
-    vlm_path='/mnt/data_ssd/share/models/Florence-2-large'
+    vlm_path='/mnt/data/share/models/Florence-2-large'
     freeze_florence=False
     freeze_vision_tower=False
-    freeze_embeddings_only=False
+    freeze_embeddings_only=True
     vlm_prompt_style='default'
     token_dropout=0.1  # Added token dropout parameter
 
@@ -99,7 +92,7 @@ class FlowerConfig(PreTrainedConfig):
     device = 'cuda'
     mixed_precision = 'bf16'
     # pretraining stuff
-    load_pretrained=True
+    load_pretrained=False
     pretrained_model_path='/mnt/data_ssd/share/models/flower_vla_pret/360000_model_weights.pt'
 
     # Model flags
