@@ -49,7 +49,7 @@ from lerobot.policies.utils import (
 )
 from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_IMAGES, OBS_STATE
 from lerobot.policies.flower.configuration_flower import FlowerConfig
-from lerobot.datasets.utils import generate_policy_prompt, ActionIndex
+from lerobot.policies.flower.utils import generate_policy_prompt, ActionIndex
 from lerobot.policies.flower.transformers_flower import (
     TimestepEmbedder,
     SharedAdaLNController,
@@ -180,10 +180,12 @@ class FlowerPolicy(PreTrainedPolicy):
     def preprocess_batch(self, batch):
         if self.config.image_features:
             images = []
-            for key in self.config.image_features:
+            # for key in self.config.image_features:
             # for key in self.config.cams:
-            # if True:
-                # key = self.config.cams
+            if True:
+                key = self.config.cams # 预训练时，只使用单个cam图像
+                # if key not in batch:
+                #     batch[key] = batch['observation.images.image2']
                 image = batch[key] if len(batch[key].shape)==5 else batch[key].unsqueeze(1)
                 bs, obs, c, h, w = image.shape
                 image = image.view(bs*obs, c, h, w)
@@ -231,7 +233,7 @@ class FlowerModel(nn.Module):
             self._load_pretrained_weights(config.pretrained_model_path)
         
         # Ensure that all parameters and buffers are on the correct device.
-        self.ensure_device_consistency()
+        # self.ensure_device_consistency()
 
     # ========= init  ============
     def _setup_vlm(self, vlm_path: str, freeze_vision_tower: bool, freeze_florence: bool, freeze_embeddings_only: bool):
@@ -344,7 +346,7 @@ class FlowerModel(nn.Module):
                     self.proprio_encoders[action_name] = ZeroEncoder(
                         self.config.dit_dim,
                         device=self.device
-                    ) 
+                    ).to(self.device)
                     print(f"Added zero encoder for {action_name}")
             
     def _load_pretrained_weights(self, pretrained_model_path: str, mean_resizing: bool = False):
@@ -420,7 +422,7 @@ class FlowerModel(nn.Module):
         # Handle language encoder/model naming mismatch
         for key, value in state_dict.items():
             new_key = key.replace("agent.", "")  # Remove 'agent.' if it exists
-            
+            new_key = new_key.replace("flower.", "")
             # Handle language encoder/model naming mismatch
             if "vlm.language_encoder." in new_key:
                 new_key = new_key.replace("vlm.language_encoder.", "vlm.language_model.model.encoder.")
@@ -489,29 +491,6 @@ class FlowerModel(nn.Module):
         ]
         vlm_optim_params = [p for p in self.vlm.parameters() if p.requires_grad]
         return dit_optim_groups, vlm_optim_params
-    
-    def ensure_device_consistency(self) -> None:
-        """Moves the entire model (and buffers) to the designated device."""
-        self.to(self.device)
-        self.vlm.to(self.device)
-        if not self.config.use_rope and hasattr(self, 'positional_encoding'):
-            self.positional_encoding = self.positional_encoding.to(self.device)
-        if self.config.use_readout_token and hasattr(self, 'register_token'):
-            self.register_token = self.register_token.to(self.device)
-        self._verify_device_consistency()
-
-    def _verify_device_consistency(self) -> None:
-        """Verifies that all parameters and buffers are on the expected device."""
-        expected = self.device
-        inconsistent = []
-        for name, param in self.named_parameters():
-            if str(param.device) != expected:
-                inconsistent.append(f"{name}: {param.device} (expected {expected})")
-        for name, buf in self.named_buffers():
-            if str(buf.device) != expected:
-                inconsistent.append(f"{name} (buffer): {buf.device} (expected {expected})")
-        if inconsistent:
-            print("Device consistency issues: " + "; ".join(inconsistent))
     
     # ========= inference  ============
     def conditional_sample(
@@ -659,8 +638,8 @@ class FlowerModel(nn.Module):
             diff, 
             torch.tensor(0.0, device=diff.device)
             ) # valid_diff = diff[valid_mask]  # valid_diff = diff
-        loss = (valid_diff ** 2)  # l2
-        # loss = torch.abs(valid_diff)  # l1
+        # loss = (valid_diff ** 2)  # l2
+        loss = torch.abs(valid_diff)  # l1
         # Mask loss wherever the action is padded with copies (edges of the dataset trajectory).
         if self.config.do_mask_loss_for_padding:
             if "action_is_pad" not in batch:
@@ -864,9 +843,9 @@ class FlowerModel(nn.Module):
         batch_action_index = []
         for idx, instruction in enumerate(language_instruction):
             # print(robot_types)
-            # robot_type = 'panda'
-            robot_type = 'aloha'
-            instruction = 'Pick up the cube with the right arm and transfer it to the left arm.'
+            robot_type = 'panda'
+            # robot_type = 'aloha'
+            # instruction = 'Pick up the cube with the right arm and transfer it to the left arm.'
             action_index = self.action_space_index.robot_mapping[robot_type]
             batch_action_index.append(action_index)
             instruction = generate_policy_prompt(
@@ -878,7 +857,7 @@ class FlowerModel(nn.Module):
                 include_meta=True
                 )
             text_prompts.append(instruction)
-        print(instruction)
+        # print(instruction)
         batch_action_index = torch.tensor(batch_action_index)
         return text_prompts, batch_action_index
     
@@ -918,7 +897,7 @@ class FlowerModel(nn.Module):
             mask = (action_type == action_idx)
             if mask.any():
                 adim = self.action_space_index.get_action_dim(action_idx)
-                encoded_proprio[mask] = self.proprio_encoders[action_name](proprio[mask, :adim]).squeeze(1)
+                encoded_proprio[mask] = self.proprio_encoders[action_name](proprio[mask, :adim]).squeeze(1).to(default_dtype)
         return encoded_proprio
     
     def encode_actions(self, z: torch.Tensor, action_type: torch.Tensor) -> torch.Tensor:

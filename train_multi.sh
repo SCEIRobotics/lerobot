@@ -1,5 +1,5 @@
 #!/bin/bash
-# export CUDA_VISIBLE_DEVICES=1,3
+export CUDA_VISIBLE_DEVICES=3,4
 
 # export MUJOCO_GL=egl # 强制 MuJoCo 使用 EGL 渲染（关键）
 # export PYOPENGL_PLATFORM=egl # 禁用 GLFW 图形窗口（避免初始化错误）
@@ -12,10 +12,8 @@ TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 
 accelerate launch --config_file multi_gpu.yaml \
  ./src/lerobot/scripts/lerobot_train_multi.py \
-    --dataset.root=/vla-cd \
-    --dataset.repo_id=InternData-A1/test \
-    --dataset.root_val=/vla-cd/tensorflow_datasets_lerobot/aloha_sim_transfer_cube_scripted \
-    --dataset.repo_id_val=tensorflow_datasets_lerobot/aloha_sim_transfer_cube_scripted \
+    --dataset.root='["/mnt/data/hanmingyan/code/hmy_data_tools/interna1_merge_all/interna1_franka_processed_diff_merge", "/mnt/data/hanmingyan/code/hmy_data_tools/interna1_merge_all/interna1_franka_processed_same_merge"]' \
+    --dataset.repo_id='["interna1_merge_all/interna1_franka_processed_diff_merge", "interna1_merge_all/interna1_franka_processed_same_merge"]' \
     --dataset.streaming=true \
     --dataset.requires_padding=true \
     --policy.type=flower \
@@ -26,10 +24,9 @@ accelerate launch --config_file multi_gpu.yaml \
     --policy.device=cuda \
     --batch_size=64 \
     --num_workers=4 \
-    --steps=800000 \
+    --steps=1600000 \
     --save_freq=20000 \
-    --valid_freq=5000 \
-    --output_dir=/vla-cd/tmp/daiwanqin/train-a1-${TIMESTAMP} \
+    --output_dir=./outputs/train-a1-tmp-${TIMESTAMP} \
     --wandb.enable=true \
     --wandb.disable_artifact=true \
     --wandb.mode=offline \

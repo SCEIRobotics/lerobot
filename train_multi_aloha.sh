@@ -1,5 +1,5 @@
 #!/bin/bash
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=6
 
 export MUJOCO_GL=egl # 强制 MuJoCo 使用 EGL 渲染（关键）
 export PYOPENGL_PLATFORM=egl # 禁用 GLFW 图形窗口（避免初始化错误）
@@ -12,10 +12,9 @@ TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 # --dataset.streaming=true \
 # accelerate launch --config_file multi_gpu.yaml \
 python ./src/lerobot/scripts/lerobot_train_multi.py \
-    --dataset.root=/mnt/data_ssd/share/datasets/aloha_sim_transfer_cube_scripted \
-    --dataset.repo_id=datasets/aloha_sim_transfer_cube_scripted \
-    --dataset.root_val=/mnt/data_ssd/share/datasets/aloha_sim_transfer_cube_scripted \
-    --dataset.repo_id_val=datasets/aloha_sim_transfer_cube_scripted \
+    --dataset.root=/mnt/data/share/datasets/flower/aloha_sim_transfer_cube_scripted \
+    --dataset.repo_id=vla-cd/aloha_sim_transfer_cube_scripted \
+    --dataset.streaming=true \
     --dataset.requires_padding=true \
     --policy.type=flower \
     --policy.n_obs_steps=1 \
@@ -28,7 +27,7 @@ python ./src/lerobot/scripts/lerobot_train_multi.py \
     --steps=100000 \
     --save_freq=10000 \
     --valid_freq=-1 \
-    --output_dir=./outputs/train-aloha-dataset-${TIMESTAMP} \
+    --output_dir=./outputs/train-aloha-a1_old-${TIMESTAMP} \
     --wandb.enable=true \
     --wandb.disable_artifact=true \
     --wandb.mode=offline \
