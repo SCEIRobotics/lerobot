@@ -658,44 +658,6 @@ class FlowerModel(nn.Module):
         loss_mean = loss.sum() / (valid_mask.sum().float() + 1e-8)
         return loss_mean
     
-<<<<<<< HEAD
-=======
-    def compute_val_loss(self, batch, diff):
-        trajectory = batch[ACTION]
-        action_type = batch['action_index'].to(diff.device)
-        # valid_mask
-        valid_mask = torch.zeros_like(trajectory, dtype=torch.bool)
-        for action_name, action_idx in self.action_space_index.action_spaces.items():
-            mask = (action_type == action_idx)
-            if mask.any():
-                mask = batch['valid']  # 在这里应用valid，处理错误数据
-                adim = self.action_space_index.get_action_dim(action_idx)
-                mask_expanded = mask.view(-1, 1, 1).expand(-1, trajectory.size(1), adim).to(diff.device)
-                valid_mask[mask, :, :adim] = mask_expanded[mask]
-        
-        valid_diff = torch.where(
-            valid_mask, 
-            diff, 
-            torch.tensor(0.0, device=diff.device)
-            ) # valid_diff = diff[valid_mask]  # valid_diff = diff
-        loss = (valid_diff ** 2)  # l2
-        # loss = torch.abs(valid_diff)  # l1
-        # Mask loss wherever the action is padded with copies (edges of the dataset trajectory).
-        if self.config.do_mask_loss_for_padding:
-            if "action_is_pad" not in batch:
-                raise ValueError(
-                    "You need to provide 'action_is_pad' in the batch when "
-                    f"{self.config.do_mask_loss_for_padding=}."
-                )
-            in_episode_bound = ~batch["action_is_pad"]
-            # loss = loss * in_episode_bound.unsqueeze(-1)
-            in_episode_bound = in_episode_bound.unsqueeze(-1).expand(*in_episode_bound.shape, loss.size(-1))
-            valid_mask = valid_mask & in_episode_bound
-            loss = loss * in_episode_bound
-        loss_mean = loss.sum() / (valid_mask.sum().float() + 1e-8)
-        return loss_mean
-
->>>>>>> a1_tmp_local
     def encode_observations(self, batch):
         """Encode observations using Florence-2"""
         
