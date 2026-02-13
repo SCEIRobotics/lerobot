@@ -364,7 +364,7 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         for update in updates:
             result.update(update)
         result['sub_idx'] = self.sub_idx
-        result["valid"] = valid
+        result["valid"] = valid if len(self.meta.video_keys) > 0 else True
         result["task"] = self.meta.tasks.iloc[item["task_index"]].name
         result['robot_type'] = self.meta.info['robot_type']
         yield result

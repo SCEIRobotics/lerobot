@@ -200,6 +200,10 @@ def save_scheduler_state(
         # Handle single scheduler
         save_single_scheduler_state(scheduler, save_dir)
 
+def save_single_scheduler_state(scheduler: LRScheduler, save_dir: Path) -> None:
+    state_dict = scheduler.state_dict()
+    write_json(state_dict, save_dir / SCHEDULER_STATE)
+
 def load_scheduler_state(scheduler: LRScheduler | dict[str, LRScheduler], save_dir: Path) -> LRScheduler | dict[str, LRScheduler]:
     if isinstance(scheduler, dict):
         # Handle dictionary of schedulers
@@ -214,10 +218,6 @@ def load_scheduler_state(scheduler: LRScheduler | dict[str, LRScheduler], save_d
     else:
         # Handle single scheduler 
         return load_single_scheduler_state(scheduler, save_dir)
-
-def save_single_scheduler_state(scheduler: LRScheduler, save_dir: Path) -> None:
-    state_dict = scheduler.state_dict()
-    write_json(state_dict, save_dir / SCHEDULER_STATE)
 
 def load_single_scheduler_state(scheduler: LRScheduler | dict[str, LRScheduler], save_dir: Path) -> LRScheduler | dict[str, LRScheduler]:
     state_dict = deserialize_json_into_object(save_dir / SCHEDULER_STATE, scheduler.state_dict())
