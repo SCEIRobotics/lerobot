@@ -166,20 +166,6 @@ class FlowerPolicy(PreTrainedPolicy):
         action = self._queues[ACTION].popleft()
         return action
 
-<<<<<<< HEAD
-=======
-    @torch.no_grad()
-    def validate_action(self, batch: dict[str, Tensor], noise: Tensor | None = None) -> Tensor:
-        gt = batch[ACTION]
-
-        if self.config.image_features:
-            batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original     
-            batch = self.preprocess_batch(batch)
-        actions = self.flower.generate_actions(batch, noise=noise)
-        loss = self.flower.compute_val_loss(batch, actions - gt)
-        return loss
-
->>>>>>> a1_tmp_local
     def preprocess_batch(self, batch):
         if self.config.image_features:
             images = []
