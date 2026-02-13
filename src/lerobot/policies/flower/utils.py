@@ -111,6 +111,8 @@ class ActionIndex:
             # 'aloha': 3,
             # "panda": 1,
 
+            'piper': 2,
+
             'franka': 0,
             'lift2': 3,
             'split_aloha': 3,

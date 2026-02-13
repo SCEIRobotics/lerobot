@@ -76,6 +76,13 @@ class PreTrainedConfig(draccus.ChoiceRegistry, HubMixin, abc.ABC):  # type: igno
     # Either the repo ID of a model hosted on the Hub or a path to a directory containing weights
     # saved using `Policy.save_pretrained`. If not provided, the policy is initialized from scratch.
     pretrained_path: Path | None = None
+    # flower config:
+    vlm_path: Path | None = None
+    freeze_embeddings_only: bool = True
+    load_pretrained: bool = False
+    pretrained_model_path: str | None = None
+    resize_h: int = 224
+    resize_w: int = 224
 
     def __post_init__(self) -> None:
         if not self.device or not is_torch_device_available(self.device):

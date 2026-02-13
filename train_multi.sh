@@ -22,6 +22,12 @@ accelerate launch --config_file multi_gpu.yaml \
     --policy.n_action_steps=60 \
     --policy.push_to_hub=false \
     --policy.device=cuda \
+    --policy.vlm_path='/mnt/data/share/models/Florence-2-large' \
+    --policy.freeze_embeddings_only=true \
+    --policy.load_pretrained=false \
+    --policy.pretrained_model_path='/mnt/data_ssd/share/models/flower_vla_pret/360000_model_weights.pt' \
+    --policy.resize_h=224 \
+    --policy.resize_w=224 \
     --batch_size=64 \
     --num_workers=4 \
     --steps=1600000 \

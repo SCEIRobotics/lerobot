@@ -296,7 +296,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             batch_size=cfg.batch_size,
             shuffle=shuffle and not cfg.dataset.streaming,
             sampler=sampler,
-            collate_fn=FlowerDataCollator(),
+            collate_fn=FlowerDataCollator(vlm_path=cfg.policy.vlm_path),
             pin_memory=device.type == "cuda",
             drop_last=True,
             prefetch_factor=2 if suggested_num_workers > 0 else None,
