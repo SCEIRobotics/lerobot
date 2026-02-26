@@ -139,12 +139,12 @@ class FlowerPolicy(PreTrainedPolicy):
         # batch = {k: torch.stack(list(self._queues[k]), dim=1) for k in batch if k in self._queues}
         constructed_prompts, batch_action_index = self.flower.construct_prompts(batch['task'])
         text_inputs = self.flower._get_text_inputs(constructed_prompts)
-        # import pdb; pdb.set_trace()
+
         batch['text_input_ids'] = text_inputs['input_ids']
         batch['text_attention_mask'] = text_inputs.data["attention_mask"]
         batch['action_index'] = batch_action_index
         batch['observation.state'] = batch['observation.state'].unsqueeze(1)
-        # import pdb; pdb.set_trace()
+
         actions = self.flower.generate_actions(batch, noise=noise)
 
         return actions
@@ -169,20 +169,16 @@ class FlowerPolicy(PreTrainedPolicy):
     def preprocess_batch(self, batch):
         if self.config.image_features:
             images = []
-            # for key in self.config.image_features:
-            # for key in self.config.cams:
-            if True:
-                key = self.config.cams # 预训练时，只使用单个cam图像
-                # if key not in batch:
-                #     batch[key] = batch['observation.images.image2']
-                image = batch[key] if len(batch[key].shape)==5 else batch[key].unsqueeze(1)
-                bs, obs, c, h, w = image.shape
-                image = image.view(bs*obs, c, h, w)
-                image = self.resize(image)
-                image = image.view(bs, obs, c, self.config.resize_h, self.config.resize_w)
-                images.append(image)
+            for key in self.config.image_features:
+                if key in batch:
+                    image = batch[key] if len(batch[key].shape)==5 else batch[key].unsqueeze(1)
+                    bs, obs, c, h, w = image.shape
+                    image = image.view(bs*obs, c, h, w)
+                    image = self.resize(image)
+                    image = image.view(bs, obs, c, self.config.resize_h, self.config.resize_w)
+                    images.append(image)
             batch[OBS_IMAGES] = torch.stack(images, dim=-4)  # (bs, obs, cam, c, h, w)
-            # import pdb; pdb.set_trace()
+
         return batch
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, None]:
@@ -677,7 +673,6 @@ class FlowerModel(nn.Module):
             img_features,
             text_embeds.to(img_features.device)
         ], dim=1)
-
         # Create attention mask
         # attention_mask = torch.ones(merged_embeds.shape[:2], device=merged_embeds.device)
         prompt_mask = torch.zeros(batch_size, 1, dtype=torch.bool, device=device) # 啥用？

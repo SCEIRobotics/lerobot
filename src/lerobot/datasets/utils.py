@@ -1411,12 +1411,6 @@ def process_padding(batch, cfg):
         batch[f'{ACTION}_mask'][..., -action_pad:] = False
         batch[f'{OBS_STATE}_mask'][..., -state_pad:] = False
     
-    try:
-        target_key = f"{cfg.cams}"
-        batch[target_key] = batch['observation.images.rgb.head']
-    except:
-        target_key = f"{cfg.cams}"
-        batch[target_key] = batch['observation.images.top']
     return batch
 
 
@@ -1447,4 +1441,5 @@ DATASET_WEIGHT = {
 
     'aloha_sim_transfer_cube_scripted': 100,
     'libero': 1.0,
+    'aloha': 10.0,
 }

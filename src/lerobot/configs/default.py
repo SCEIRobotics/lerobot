@@ -35,7 +35,6 @@ class DatasetConfig:
     use_imagenet_stats: bool = True
     video_backend: str = field(default_factory=get_safe_default_codec)
     streaming: bool = False
-    requires_padding: bool = False
 
 
 @dataclass

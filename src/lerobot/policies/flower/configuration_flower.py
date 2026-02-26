@@ -126,7 +126,6 @@ class FlowerConfig(PreTrainedConfig):
 
     resize_h: int = 224
     resize_w: int = 224
-    cams: str = 'observation.images.top'
 
     def __post_init__(self):
         super().__post_init__()

@@ -108,8 +108,8 @@ class ActionIndex:
             # "Google Robot": 1,
             # "unknown": 1,
             # "Franka": 0, 
-            # 'aloha': 3,
-            # "panda": 1,
+            'aloha': 3,
+            "panda": 1,
 
             'piper': 2,
 

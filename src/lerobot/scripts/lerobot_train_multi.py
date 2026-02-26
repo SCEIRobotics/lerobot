@@ -289,7 +289,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     sample_weights = []
     dataset_sizes = []
     for sub_idx in range(len(datasets)):
-        suggested_num_workers = datasets[sub_idx].suggested_num_workers
+        suggested_num_workers = 4 # datasets[sub_idx].suggested_num_workers
         dataloader = torch.utils.data.DataLoader(
             datasets[sub_idx],
             num_workers=suggested_num_workers,
@@ -359,17 +359,14 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     for batch_idx in range(step, cfg.steps):
         with accelerator.accumulate(policy):
             start_time = time.perf_counter()
-            st = time.time()
             
             dataloader_idx = random.choices(range(len(dataloaders)), weights=sample_weights)[0]
             if len(init_list)>0:
                 dataloader_idx = init_list.pop()
-            # print(f'dataloader_idx: {dataloader_idx}')
             batch = next(dl_iters[dataloader_idx])
             batch = preprocessor[dataloader_idx](batch) 
             batch = process_padding(batch, cfg.policy)
             train_tracker.dataloading_s = time.perf_counter() - start_time
-            pt = time.time()
             train_tracker, output_dict = update_policy(
                 train_tracker,
                 policy,
@@ -379,11 +376,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                 accelerator=accelerator,
                 lr_scheduler=lr_scheduler,
             )
-            ut = time.time()
-            # print(f"dataloading_s: {pt-st:.3f}, update_s: {ut - pt:.3f}")
         # Note: eval and checkpoint happens *after* the `step`th training update has completed, so we
         # increment `step` here.
-        # flower pret没有选择在同步梯度的时候更新step
         step += 1
         train_tracker.step()
         is_log_step = cfg.log_freq > 0 and step % cfg.log_freq == 0 and is_main_process
@@ -391,7 +385,6 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         is_eval_step = cfg.eval_freq > 0 and step % cfg.eval_freq == 0
 
         if is_log_step:
-            logging.info(f"dataloading_s: {pt-st:.3f}, update_s: {ut - pt:.3f}")
             logging.info(train_tracker)
             if wandb_logger:
                 wandb_log_dict = train_tracker.to_dict()
