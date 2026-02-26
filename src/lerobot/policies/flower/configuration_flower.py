@@ -15,7 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from dataclasses import dataclass, field
-
+from pathlib import Path
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.types import NormalizationMode
 from lerobot.optim.optimizers import AdamConfig, AdamWConfig, MultiAdamWConfig, MultiAdamConfig
@@ -71,57 +71,62 @@ class FlowerConfig(PreTrainedConfig):
     # pret:
     learning_rate_dit: float = 1e-4
     learning_rate_vlm: float = 2e-5
-    beta_dit = (0.9, 0.95)
-    beta_vlm = (0.9, 0.99)
-
-    weight_decay = {"transformer_weight_decay": 0.1, "vlm_weight_decay": 1e-9}
-    dit_lr_scheduler = {"init_lr_scale": 0.1, "final_lr_scale": 0.1, "phase_ratio": "(0.01, 0.39, 0.6)", "total_steps": 2400000}
-    vlm_lr_scheduler = {"init_lr_scale": 0.01, "final_lr_scale": 0.1, "phase_ratio": "(0.1, 0.3, 0.6)", "total_steps": 2400000}
+    beta_dit: tuple[float, float] = (0.9, 0.95)
+    beta_vlm: tuple[float, float] = (0.9, 0.99)
+    weight_decay: dict[str, float] = field(
+        default_factory=lambda: {"transformer_weight_decay": 0.1, "vlm_weight_decay": 1e-9}
+    )
+    dit_lr_scheduler: dict[str, float | str | int] = field(
+        default_factory=lambda: {"init_lr_scale": 0.1, "final_lr_scale": 0.1, "phase_ratio": "(0.01, 0.39, 0.6)", "total_steps": 2400000}
+    )
+    vlm_lr_scheduler: dict[str, float | str | int] = field(
+        default_factory=lambda: {"init_lr_scale": 0.01, "final_lr_scale": 0.1, "phase_ratio": "(0.1, 0.3, 0.6)", "total_steps": 2400000}
+    )
 
     # flower:
     # VLM Configuration
-    vlm_path='/mnt/data/share/models/Florence-2-large'
-    freeze_florence=False
-    freeze_vision_tower=False
-    freeze_embeddings_only=True
-    vlm_prompt_style='default'
-    token_dropout=0.1  # Added token dropout parameter
+    vlm_path: Path = '/mnt/data/share/models/Florence-2-large'
+    freeze_florence: bool = False
+    freeze_vision_tower: bool = False
+    freeze_embeddings_only: bool = True
+    vlm_prompt_style: str = 'default'
+    token_dropout: float = 0.1  # Added token dropout parameter
 
     # Model Structure
-    data_frequency: int = 3 # 30Hz. 要用fps代替吗？
-    device = 'cuda'
-    mixed_precision = 'bf16'
+    data_frequency: int = 3 # 30Hz
+    device: str | None = 'cuda'
+    mixed_precision: str = 'bf16'
     # pretraining stuff
-    load_pretrained=False
-    pretrained_model_path='/mnt/data_ssd/share/models/flower_vla_pret/360000_model_weights.pt'
+    load_pretrained: bool = False
+    pretrained_model_path: Path | None = '/mnt/data_ssd/share/models/flower_vla_pret/360000_model_weights.pt'
 
     # Model flags
-    action_type_adaln=True
-    use_causal_attention=True   
-    use_cross_attn=True
-    use_adaln_cond=False
-    use_readout_token=False
-    use_proprio=True
-    return_act_chunk=False
+    action_type_adaln: bool = True
+    use_causal_attention: bool = True   
+    use_cross_attn: bool = True
+    use_adaln_cond: bool = False
+    use_readout_token: bool = False
+    use_proprio: bool = True
+    return_act_chunk: bool = False
 
     # DiT Configuration
-    sampling_type='uniform'
-    dit_dim=1024
-    n_heads=16
-    n_layers=12
-    attn_pdrop=0.1
-    resid_pdrop=0.1
-    mlp_pdrop=0.1
+    sampling_type: str = 'uniform'
+    dit_dim: int = 1024
+    n_heads: int = 16
+    n_layers: int = 12
+    attn_pdrop: float = 0.1
+    resid_pdrop: float = 0.1
+    mlp_pdrop: float = 0.1
 
     # RoPE Configuration
-    use_rope=True
-    use_nope=False
-    query_seq_len=100
-    rope_theta=32.0
+    use_rope: bool = True
+    use_nope: bool = False
+    query_seq_len: int = 100
+    rope_theta: float = 32.0
 
-    resize_h=224
-    resize_w=224
-    cams='observation.images.top'
+    resize_h: int = 224
+    resize_w: int = 224
+    cams: str = 'observation.images.top'
 
     def __post_init__(self):
         super().__post_init__()
