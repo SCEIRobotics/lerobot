@@ -345,7 +345,7 @@ class FlowerModel(nn.Module):
 
         print(f"Loading pretrained weights from {pretrained_model_path}...")
         # Determine file type and load accordingly
-        if pretrained_model_path.endswith('.safetensors'):
+        if pretrained_model_path.suffix == ".safetensors":
             # Load safetensors file
             from safetensors.torch import load_file
             state_dict = load_file(pretrained_model_path, device=str(self.device))
