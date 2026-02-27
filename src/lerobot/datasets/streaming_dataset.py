@@ -38,11 +38,9 @@ from lerobot.datasets.video_utils import (
     decode_video_frames_torchcodec,
 )
 from lerobot.utils.constants import HF_LEROBOT_HOME, LOOKAHEAD_BACKTRACKTABLE, LOOKBACK_BACKTRACKTABLE
-from lerobot.datasets.utils import process_padding
 import torchvision
 import random
 from itertools import cycle
-from lerobot.datasets.utils import DATASET_WEIGHT
 
 
 class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
@@ -144,7 +142,6 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         self.meta = LeRobotDatasetMetadata(
             self.repo_id, self.root, self.revision, force_cache_sync=force_cache_sync
         )
-        self.weight = DATASET_WEIGHT[self.repo_id.split("/")[-1]]
         # Check version
         check_version_compatibility(self.repo_id, self.meta._version, CODEBASE_VERSION)
 

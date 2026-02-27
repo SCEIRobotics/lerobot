@@ -51,9 +51,6 @@ from lerobot.utils.utils import (
     has_method,
     init_logging,
 )
-from lerobot.utils.constants import OBS_IMAGES, OBS_STATE, ACTION, MAX_ACTION_DIM
-from lerobot.datasets.utils import process_padding
-import torch.nn.functional as F
 import gc
 import numpy as np
 import random
@@ -286,8 +283,14 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     sampler = None 
     from lerobot.policies.flower.utils import FlowerDataCollator
     dataloaders_ = []
-    sample_weights = []
     dataset_sizes = []
+    # Get sample weights from config
+    if cfg.dataset.weights is None:
+        sample_weights = [1.0] * len(datasets)
+    elif isinstance(cfg.dataset.weights, float):
+        sample_weights = [cfg.dataset.weights] * len(datasets)
+    else:
+        sample_weights = cfg.dataset.weights
     for sub_idx in range(len(datasets)):
         suggested_num_workers = 4 # datasets[sub_idx].suggested_num_workers
         dataloader = torch.utils.data.DataLoader(
@@ -302,12 +305,11 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             prefetch_factor=2 if suggested_num_workers > 0 else None,
             )
         dataloaders_.append(dataloader)
-        sample_weights.append(datasets[sub_idx].weight)
         dataset_sizes.append(datasets[sub_idx].meta.total_frames)
     sample_weights = np.array(sample_weights) * np.array(dataset_sizes)
     sample_weights = np.array(sample_weights) / np.sum(sample_weights)
-    print(f'dataset_sizes: {dataset_sizes}')
-    print(f'sample_weights: {sample_weights}')
+    logging.info(f'dataset_sizes: {dataset_sizes}')
+    logging.info(f'sample_weights: {sample_weights}')
     init_list = [idx for idx in range(len(dataloaders_))]
 
     # Prepare everything with accelerator
@@ -330,7 +332,6 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     else:
         lr_scheduler = accelerator.prepare(lr_scheduler)
 
-    # dl_iter = cycle(dataloader)
     dl_iters = [cycle(dl) for dl in dataloaders]
     policy.train()
 
@@ -365,7 +366,6 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                 dataloader_idx = init_list.pop()
             batch = next(dl_iters[dataloader_idx])
             batch = preprocessor[dataloader_idx](batch) 
-            batch = process_padding(batch, cfg.policy)
             train_tracker.dataloading_s = time.perf_counter() - start_time
             train_tracker, output_dict = update_policy(
                 train_tracker,

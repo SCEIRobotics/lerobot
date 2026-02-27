@@ -60,8 +60,8 @@ from lerobot.policies.flower.transformers_flower import (
     FlowBlock, 
     stateless_norm
 )
-from torchvision.utils import save_image
-from lerobot.utils.constants import MAX_ACTION_DIM
+
+
 dtype_map = {
     'bf16': torch.bfloat16,
     'no': torch.float32
@@ -153,6 +153,7 @@ class FlowerPolicy(PreTrainedPolicy):
         if self.config.image_features:
             batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original     
             batch = self.preprocess_batch(batch)
+        batch = self.process_padding(batch, self.flower.max_action_dim)
         
         if len(self._queues[ACTION]) == 0:
             actions = self.predict_action_chunk(batch, noise=noise)
@@ -176,10 +177,45 @@ class FlowerPolicy(PreTrainedPolicy):
 
         return batch
 
+    def process_padding(self, batch, max_action_dim):
+        bs, horizon, action_dim = batch[ACTION].shape
+        bs, horizon, state_dim = batch[OBS_STATE].shape
+        if action_dim > max_action_dim:
+            raise ValueError(f"The action dimension {action_dim} exceeds the maximum allowed dimension {max_action_dim}")
+
+        action_pad = max_action_dim - action_dim
+        batch[ACTION] = F.pad(
+            batch[ACTION], 
+            (0, action_pad) + (0, 0) * (batch[ACTION].ndim - 1), 
+            mode='constant', 
+            value=0.0
+            )
+        state_pad = max_action_dim - state_dim
+        batch[OBS_STATE] = F.pad(
+            batch[OBS_STATE], 
+            (0, state_pad) + (0, 0) * (batch[OBS_STATE].ndim - 1), 
+            mode='constant', 
+            value=0.0
+            )
+        batch[f'{ACTION}_mask'] = torch.ones(
+            bs, max_action_dim,
+            device=batch[ACTION].device, dtype=torch.bool
+            )
+        batch[f'{OBS_STATE}_mask'] = torch.ones(
+            bs, max_action_dim,
+            device=batch[OBS_STATE].device, dtype=torch.bool
+            )
+        if action_pad > 0 or state_pad>0:
+            batch[f'{ACTION}_mask'][..., -action_pad:] = False
+            batch[f'{OBS_STATE}_mask'][..., -state_pad:] = False
+        
+        return batch
+
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, None]:
         """Run the batch through the model and compute the loss for training or validation."""
         batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
         batch = self.preprocess_batch(batch)
+        batch = self.process_padding(batch, self.flower.max_action_dim)
         loss = self.flower.compute_loss(batch)
         # no output_dict so returning None
         return loss, None
@@ -212,7 +248,7 @@ class FlowerModel(nn.Module):
         if config.load_pretrained and config.pretrained_model_path is not None:
             self._load_pretrained_weights(config.pretrained_model_path)
         
-        # Ensure that all parameters and buffers are on the correct device.
+        self.max_action_dim = self.action_space_index.get_max_action_dim()
 
     # ========= init  ============
     def _setup_vlm(self, vlm_path: str, freeze_vision_tower: bool, freeze_florence: bool, freeze_embeddings_only: bool):
@@ -320,13 +356,11 @@ class FlowerModel(nn.Module):
                     out_features=self.config.dit_dim, 
                     drop=0.2
                     ).to(self.device)
-                    print(f"Added proprio encoder for {action_name}")
                 else:
                     self.proprio_encoders[action_name] = ZeroEncoder(
                         self.config.dit_dim,
                         device=self.device
                     ).to(self.device)
-                    print(f"Added zero encoder for {action_name}")
             
     def _load_pretrained_weights(self, pretrained_model_path: str, mean_resizing: bool = False):
         """Loads pretrained weights, handling key mismatches (e.g., different prefixes)."""
@@ -465,7 +499,7 @@ class FlowerModel(nn.Module):
             noise
             if noise is not None
             else torch.randn(
-                size=(batch_size, self.config.horizon, MAX_ACTION_DIM),
+                size=(batch_size, self.config.horizon, self.max_action_dim),
                 dtype=dtype,
                 device=device,
                 generator=generator,
@@ -835,8 +869,7 @@ class FlowerModel(nn.Module):
                 decoded = self.action_decoders[action_name](z)
 
         batch_size = z.shape[0]
-        max_action_dim = self.action_space_index.get_max_action_dim()
-        decoded = torch.zeros(batch_size, z.shape[1], max_action_dim, device=device, dtype=default_dtype)
+        decoded = torch.zeros(batch_size, z.shape[1], self.max_action_dim, device=device, dtype=default_dtype)
         for action_name, action_idx in self.action_space_index.action_spaces.items():
             mask = (action_type == action_idx)
             if mask.any():
