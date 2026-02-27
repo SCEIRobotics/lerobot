@@ -138,7 +138,6 @@ class FlowerPolicy(PreTrainedPolicy):
         batch['text_input_ids'] = text_inputs['input_ids']
         batch['text_attention_mask'] = text_inputs.data["attention_mask"]
         batch['action_index'] = batch_action_index
-        batch['observation.state'] = batch['observation.state'].unsqueeze(1)
 
         actions = self.flower.generate_actions(batch, noise=noise)
 
@@ -178,18 +177,30 @@ class FlowerPolicy(PreTrainedPolicy):
         return batch
 
     def process_padding(self, batch, max_action_dim):
-        bs, horizon, action_dim = batch[ACTION].shape
+        if ACTION in batch:
+            if len(batch[ACTION].shape) == 2:
+                batch[ACTION] = batch[ACTION].unsqueeze(1)
+            bs, horizon, action_dim = batch[ACTION].shape
+            if action_dim > max_action_dim:
+                raise ValueError(f"The action dimension {action_dim} exceeds the maximum allowed dimension {max_action_dim}")
+            action_pad = max_action_dim - action_dim
+            batch[ACTION] = F.pad(
+                batch[ACTION], 
+                (0, action_pad) + (0, 0) * (batch[ACTION].ndim - 1), 
+                mode='constant', 
+                value=0.0
+                )
+            batch[f'{ACTION}_mask'] = torch.ones(
+                bs, max_action_dim,
+                device=batch[ACTION].device, dtype=torch.bool
+                )
+            if action_pad > 0:
+                batch[f'{ACTION}_mask'][..., -action_pad:] = False
+        if len(batch[OBS_STATE].shape) == 2:
+            batch[OBS_STATE] = batch[OBS_STATE].unsqueeze(1)
         bs, horizon, state_dim = batch[OBS_STATE].shape
-        if action_dim > max_action_dim:
-            raise ValueError(f"The action dimension {action_dim} exceeds the maximum allowed dimension {max_action_dim}")
-
-        action_pad = max_action_dim - action_dim
-        batch[ACTION] = F.pad(
-            batch[ACTION], 
-            (0, action_pad) + (0, 0) * (batch[ACTION].ndim - 1), 
-            mode='constant', 
-            value=0.0
-            )
+        if state_dim > max_action_dim:
+            raise ValueError(f"The state dimension {state_dim} exceeds the maximum allowed dimension {max_action_dim}")
         state_pad = max_action_dim - state_dim
         batch[OBS_STATE] = F.pad(
             batch[OBS_STATE], 
@@ -197,16 +208,11 @@ class FlowerPolicy(PreTrainedPolicy):
             mode='constant', 
             value=0.0
             )
-        batch[f'{ACTION}_mask'] = torch.ones(
-            bs, max_action_dim,
-            device=batch[ACTION].device, dtype=torch.bool
-            )
         batch[f'{OBS_STATE}_mask'] = torch.ones(
             bs, max_action_dim,
             device=batch[OBS_STATE].device, dtype=torch.bool
             )
-        if action_pad > 0 or state_pad>0:
-            batch[f'{ACTION}_mask'][..., -action_pad:] = False
+        if state_pad>0:
             batch[f'{OBS_STATE}_mask'][..., -state_pad:] = False
         
         return batch
