@@ -27,7 +27,7 @@ from lerobot.optim.schedulers import TriStageLRSchedulerConfig, MultiTriStageLRS
 @dataclass
 class FlowerConfig(PreTrainedConfig):
     # Inputs / output structure.
-    n_obs_steps: int = 2  # num_latest_obs flower只支持1
+    n_obs_steps: int = 1  # num_latest_obs
     horizon: int = 16  # pred action
     n_action_steps: int = 8  # exec action  deployed_action_steps
 
@@ -44,7 +44,7 @@ class FlowerConfig(PreTrainedConfig):
     drop_n_last_frames: int = 0 # horizon - n_action_steps - n_obs_steps + 1
 
     # Inference
-    num_inference_steps: int | None = 4  # num_sampling_steps=4 # flower使用rectified flow，只需要4步
+    num_inference_steps: int | None = 4  # num_sampling_steps=4
 
     # Loss computation
     do_mask_loss_for_padding: bool = True
@@ -64,7 +64,7 @@ class FlowerConfig(PreTrainedConfig):
     # init_lr=2e-5
     # init_lr_scale=0.1
     # final_lr_scale=0.5
-    # total_steps=50000  # 经过total_steps，lr从init_lr_scale*init_lr到final_lr_scale*init_lr
+    # total_steps=50000
     # phase_ratio="(0.05, 0.1, 0.85)"
     # lr=2e-5
 
