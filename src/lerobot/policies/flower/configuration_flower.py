@@ -52,6 +52,7 @@ class FlowerConfig(PreTrainedConfig):
 
     # Training presets
     training_stage: str = 'pretrain'
+    mixed_precision: str | None = None  # e.g. "bf16", "fp16", "fp32"
 
     # flower:
     # VLM Configuration
