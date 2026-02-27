@@ -100,32 +100,28 @@ class FlowerPolicy(PreTrainedPolicy):
         self.resize = torchvision.transforms.Resize((config.resize_h, config.resize_w))
 
     def get_optim_params(self) -> dict:
-        # return self.flower.parameters()
         """Get parameter groups for optimizer"""
-        dit_optim_groups, vlm_optim_params = self.flower._configure_optimizers(self.config)
-        return {"dit": dit_optim_groups, "vlm": vlm_optim_params}
-    
-    # def get_optim_params(self) -> dict:
-    #     # return self.flower.parameters()
-    #     """Get parameter groups for optimizer"""
-    #     no_decay = ['bias', 'LayerNorm', 'layernorm', 'ln', 'norm']
-    #     decay_group = []
-    #     no_decay_group = []
+        if self.config.training_stage == "pretrain":
+            dit_optim_groups, vlm_optim_params = self.flower._configure_optimizers(self.config)
+            return {"dit": dit_optim_groups, "vlm": vlm_optim_params}
+        else:
+            no_decay = ['bias', 'LayerNorm', 'layernorm', 'ln', 'norm']
+            decay_group = []
+            no_decay_group = []
 
-    #     # Collect all parameters, excluding VLM if frozen
-    #     for name, param in self.flower.named_parameters():
-    #         if param.requires_grad:
-    #             if any(nd in name.lower() for nd in no_decay):
-    #                 no_decay_group.append(param)
-    #             else:
-    #                 decay_group.append(param)
+            # Collect all parameters, excluding VLM if frozen
+            for name, param in self.flower.named_parameters():
+                if param.requires_grad:
+                    if any(nd in name.lower() for nd in no_decay):
+                        no_decay_group.append(param)
+                    else:
+                        decay_group.append(param)
 
-    #     return [
-    #         {"params": decay_group, "weight_decay": self.config.optimizer_weight_decay},
-    #         {"params": no_decay_group, "weight_decay": 0.0}
-    #     ]
-
-
+            return [
+                {"params": decay_group, "weight_decay": self.config.optimizer_weight_decay},
+                {"params": no_decay_group, "weight_decay": 0.0}
+            ]
+        
     def reset(self):
         """Clear observation and action queues. Should be called on `env.reset()`"""
         self._queues = {
@@ -764,8 +760,6 @@ class FlowerModel(nn.Module):
         batch_action_index = []
         for idx, instruction in enumerate(language_instruction):
             robot_type = 'panda'
-            # robot_type = 'aloha'
-            # instruction = 'Pick up the cube with the right arm and transfer it to the left arm.'
             action_index = self.action_space_index.robot_mapping[robot_type]
             batch_action_index.append(action_index)
             instruction = generate_policy_prompt(
