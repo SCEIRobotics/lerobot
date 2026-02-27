@@ -51,9 +51,6 @@ from lerobot.utils.utils import (
     has_method,
     init_logging,
 )
-from lerobot.utils.constants import OBS_IMAGES, OBS_STATE, ACTION, MAX_ACTION_DIM
-from lerobot.datasets.utils import process_padding
-import torch.nn.functional as F
 import gc
 import numpy as np
 import random
@@ -286,10 +283,16 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     sampler = None 
     from lerobot.policies.flower.utils import FlowerDataCollator
     dataloaders_ = []
-    sample_weights = []
     dataset_sizes = []
+    # Get sample weights from config
+    if cfg.dataset.weights is None:
+        sample_weights = [1.0] * len(datasets)
+    elif isinstance(cfg.dataset.weights, float):
+        sample_weights = [cfg.dataset.weights] * len(datasets)
+    else:
+        sample_weights = cfg.dataset.weights
     for sub_idx in range(len(datasets)):
-        suggested_num_workers = datasets[sub_idx].suggested_num_workers
+        suggested_num_workers = datasets[sub_idx].get("suggested_num_workers", cfg.num_workers)
         dataloader = torch.utils.data.DataLoader(
             datasets[sub_idx],
             num_workers=suggested_num_workers,
@@ -302,12 +305,11 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             prefetch_factor=2 if suggested_num_workers > 0 else None,
             )
         dataloaders_.append(dataloader)
-        sample_weights.append(datasets[sub_idx].weight)
         dataset_sizes.append(datasets[sub_idx].meta.total_frames)
     sample_weights = np.array(sample_weights) * np.array(dataset_sizes)
     sample_weights = np.array(sample_weights) / np.sum(sample_weights)
-    print(f'dataset_sizes: {dataset_sizes}')
-    print(f'sample_weights: {sample_weights}')
+    logging.info(f'dataset_sizes: {dataset_sizes}')
+    logging.info(f'sample_weights: {sample_weights}')
     init_list = [idx for idx in range(len(dataloaders_))]
 
     # Prepare everything with accelerator
@@ -330,7 +332,6 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     else:
         lr_scheduler = accelerator.prepare(lr_scheduler)
 
-    # dl_iter = cycle(dataloader)
     dl_iters = [cycle(dl) for dl in dataloaders]
     policy.train()
 
@@ -359,17 +360,13 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     for batch_idx in range(step, cfg.steps):
         with accelerator.accumulate(policy):
             start_time = time.perf_counter()
-            st = time.time()
             
             dataloader_idx = random.choices(range(len(dataloaders)), weights=sample_weights)[0]
             if len(init_list)>0:
                 dataloader_idx = init_list.pop()
-            # print(f'dataloader_idx: {dataloader_idx}')
             batch = next(dl_iters[dataloader_idx])
             batch = preprocessor[dataloader_idx](batch) 
-            batch = process_padding(batch, cfg.policy)
             train_tracker.dataloading_s = time.perf_counter() - start_time
-            pt = time.time()
             train_tracker, output_dict = update_policy(
                 train_tracker,
                 policy,
@@ -379,11 +376,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                 accelerator=accelerator,
                 lr_scheduler=lr_scheduler,
             )
-            ut = time.time()
-            # print(f"dataloading_s: {pt-st:.3f}, update_s: {ut - pt:.3f}")
         # Note: eval and checkpoint happens *after* the `step`th training update has completed, so we
         # increment `step` here.
-        # flower pret没有选择在同步梯度的时候更新step
         step += 1
         train_tracker.step()
         is_log_step = cfg.log_freq > 0 and step % cfg.log_freq == 0 and is_main_process
@@ -391,7 +385,6 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         is_eval_step = cfg.eval_freq > 0 and step % cfg.eval_freq == 0
 
         if is_log_step:
-            logging.info(f"dataloading_s: {pt-st:.3f}, update_s: {ut - pt:.3f}")
             logging.info(train_tracker)
             if wandb_logger:
                 wandb_log_dict = train_tracker.to_dict()
