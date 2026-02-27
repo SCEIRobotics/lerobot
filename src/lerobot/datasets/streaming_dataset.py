@@ -325,7 +325,7 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
 
         # "timestamp" restarts from 0 for each episode, whereas we need a global timestep within the single .mp4 file (given by index/fps)
         # current_ts = item["index"] / self.fps  
-        current_ts = item["timestamp"].item()
+        current_ts = item["timestamp"].item() # In the _get_query_timestamps function, the starting point of each episode video is added to the timestamp.
 
         episode_boundaries_ts = {
             key: (
@@ -384,7 +384,7 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         for key in self.meta.video_keys:
             if query_indices is not None and key in query_indices:
                 timestamps = keys_to_timestamps[key]
-                timestamps = [ts + episode_boundaries_ts[key][0] for ts in timestamps]
+                timestamps = [ts + episode_boundaries_ts[key][0] for ts in timestamps] # Add the starting point of the episode video
                 # Clamp out timesteps outside of episode boundaries
                 query_timestamps[key] = torch.clamp(
                     torch.tensor(timestamps), *episode_boundaries_ts[key]
