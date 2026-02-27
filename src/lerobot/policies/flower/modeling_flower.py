@@ -584,10 +584,8 @@ class FlowerModel(nn.Module):
         for action_name, action_idx in self.action_space_index.action_spaces.items():
             mask = (action_type == action_idx)
             if mask.any():
-                mask = True
                 adim = self.action_space_index.get_action_dim(action_idx)
-                mask_expanded = mask.view(-1, 1, 1).expand(-1, trajectory.size(1), adim).to(device)
-                valid_mask[mask, :, :adim] = mask_expanded[mask]
+                valid_mask[mask, :, :adim] = True
         
         # Compute loss on valid dimensions only
         diff = (z1 - trajectory) - vtheta
@@ -606,7 +604,6 @@ class FlowerModel(nn.Module):
                     f"{self.config.do_mask_loss_for_padding=}."
                 )
             in_episode_bound = ~batch["action_is_pad"]
-            # loss = loss * in_episode_bound.unsqueeze(-1)
             in_episode_bound = in_episode_bound.unsqueeze(-1).expand(*in_episode_bound.shape, loss.size(-1))
             valid_mask = valid_mask & in_episode_bound
             loss = loss * in_episode_bound

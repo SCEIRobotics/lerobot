@@ -52,24 +52,6 @@ class FlowerConfig(PreTrainedConfig):
 
     # Training presets
     training_stage: str = 'pretrain'
-    # # Pretrain
-    # learning_rate_dit: float = 0.0
-    # learning_rate_vlm: float = 0.0
-    # beta_dit: Tuple[float, float] = (0.0, 0.0)
-    # beta_vlm: Tuple[float, float] = (0.0, 0.0)
-    # weight_decay: Dict[str, float] = field(default_factory=dict)
-    # dit_lr_scheduler: Dict[str, Union[float, str, int]] = field(default_factory=dict)
-    # vlm_lr_scheduler: Dict[str, Union[float, str, int]] = field(default_factory=dict)
-    # # SFT
-    # optimizer_weight_decay: float = 0.0
-    # optimizer_betas: Tuple[float, float] = (0.0, 0.0)
-    # optimizer_eps: float = 0.0
-    # init_lr: float = 0.0
-    # init_lr_scale: float = 0.0
-    # final_lr_scale: float = 0.0
-    # total_steps: int = 0
-    # phase_ratio: str = ""
-    # lr: float = 0.0
 
     # flower:
     # VLM Configuration
