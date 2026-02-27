@@ -486,7 +486,7 @@ def make_policy(
         else:
             features = {}
             for sub_meta in ds_meta:
-                features.update(dataset_to_policy_features(sub_meta.features))  # key相同即使shape不同也会被覆盖
+                features.update(dataset_to_policy_features(sub_meta.features))
     else:
         if not cfg.pretrained_path:
             logging.warning(
