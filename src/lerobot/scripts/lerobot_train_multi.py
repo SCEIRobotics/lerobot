@@ -267,7 +267,6 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             logging.info(f"{cfg.env.task=}")
             logging.info("Creating environment processors")
             env_preprocessor, env_postprocessor = make_env_pre_post_processors(env_cfg=cfg.env, policy_cfg=cfg.policy)
-            # import pdb; pdb.set_trace()
         logging.info(f"{cfg.steps=} ({format_big_number(cfg.steps)})")
         logging.info(f"{sum([dataset.num_frames for dataset in datasets])=} ({format_big_number(sum([dataset.num_frames for dataset in datasets]))})")
         logging.info(f"{sum([dataset.num_episodes for dataset in datasets])=}")
@@ -292,7 +291,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     else:
         sample_weights = cfg.dataset.weights
     for sub_idx in range(len(datasets)):
-        suggested_num_workers = datasets[sub_idx].get("suggested_num_workers", cfg.num_workers)
+        suggested_num_workers = getattr(datasets[sub_idx], "suggested_num_workers", cfg.num_workers)
         dataloader = torch.utils.data.DataLoader(
             datasets[sub_idx],
             num_workers=suggested_num_workers,

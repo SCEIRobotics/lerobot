@@ -79,6 +79,7 @@ class FlowerPolicy(PreTrainedPolicy):
     def __init__(
         self,
         config: FlowerConfig,
+        **kwargs,
     ):
         """
         Args:
