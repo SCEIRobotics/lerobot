@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import dataclasses
+import importlib
 import logging
 import time
 from contextlib import nullcontext
@@ -351,13 +352,21 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     else:
         shuffle = True
         sampler = None
-
+    
+    # Create collate function if specified
+    collate_fn = None
+    if cfg.dataset.collate_fn is not None:
+        module_path, callable_name = cfg.dataset.collate_fn.rsplit('.', 1)
+        module = importlib.import_module(module_path)
+        collate_fn = getattr(module, callable_name)
+        collate_fn = collate_fn(**cfg.dataset.collate_fn_params)
     dataloader = torch.utils.data.DataLoader(
         dataset,
         num_workers=cfg.num_workers,
         batch_size=cfg.batch_size,
         shuffle=shuffle and not cfg.dataset.streaming,
         sampler=sampler,
+        collate_fn=collate_fn,
         pin_memory=device.type == "cuda",
         drop_last=False,
         prefetch_factor=2 if cfg.num_workers > 0 else None,

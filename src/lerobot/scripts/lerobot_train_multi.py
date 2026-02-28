@@ -54,7 +54,7 @@ from lerobot.utils.utils import (
 import gc
 import numpy as np
 import random
-
+import importlib
 def update_policy(
     train_metrics: MetricsTracker,
     policy: PreTrainedPolicy,
@@ -96,7 +96,7 @@ def update_policy(
 
     # Use accelerator's backward method
     accelerator.backward(loss)
-    # print(f"loss: {loss}")
+
     # Clip gradients if specified
     if grad_clip_norm > 0:
         grad_norm = accelerator.clip_grad_norm_(policy.parameters(), grad_clip_norm)
@@ -280,7 +280,6 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     # create dataloader for offline training
     shuffle = True
     sampler = None 
-    from lerobot.policies.flower.utils import FlowerDataCollator
     dataloaders_ = []
     dataset_sizes = []
     # Get sample weights from config
@@ -290,6 +289,13 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         sample_weights = [cfg.dataset.weights] * len(datasets)
     else:
         sample_weights = cfg.dataset.weights
+    collate_fn = None
+    # Create collate function if specified
+    if cfg.dataset.collate_fn is not None:
+        module_path, callable_name = cfg.dataset.collate_fn.rsplit('.', 1)
+        module = importlib.import_module(module_path)
+        collate_fn = getattr(module, callable_name)
+        collate_fn = collate_fn(**cfg.dataset.collate_fn_params)
     for sub_idx in range(len(datasets)):
         suggested_num_workers = getattr(datasets[sub_idx], "suggested_num_workers", cfg.num_workers)
         dataloader = torch.utils.data.DataLoader(
@@ -298,7 +304,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             batch_size=cfg.batch_size,
             shuffle=shuffle and not cfg.dataset.streaming,
             sampler=sampler,
-            collate_fn=FlowerDataCollator(vlm_path=cfg.policy.vlm_path),
+            collate_fn=collate_fn,
             pin_memory=device.type == "cuda",
             drop_last=True,
             prefetch_factor=2 if suggested_num_workers > 0 else None,
