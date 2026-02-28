@@ -270,8 +270,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
 
     # Create processors - only provide dataset_stats if not resuming from saved processors
     datasets_list = dataset if isinstance(dataset, list) else [dataset]
-    preprocessors = []
-    postprocessors = []
+    preprocessor = []
+    postprocessor = []
     for ds in datasets_list:
         processor_kwargs = {}
         postprocessor_kwargs = {}
@@ -312,8 +312,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             **postprocessor_kwargs,
         )
         
-        preprocessors.append(pre)
-        postprocessors.append(post)
+        preprocessor.append(pre)
+        postprocessor.append(post)
 
     if is_main_process:
         logging.info("Creating optimizer and scheduler")
@@ -349,8 +349,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
 
     num_learnable_params = sum(p.numel() for p in policy.parameters() if p.requires_grad)
     num_total_params = sum(p.numel() for p in policy.parameters())
-    ds_num_frames = sum(ds.meta.num_frames for ds in datasets_list)
-    ds_num_episodes = sum(ds.meta.num_episodes for ds in datasets_list)
+    ds_num_frames = sum(ds.num_frames for ds in datasets_list)
+    ds_num_episodes = sum(ds.num_episodes for ds in datasets_list)
 
     if is_main_process:
         logging.info(colored("Output dir:", "yellow", attrs=["bold"]) + f" {cfg.output_dir}")
@@ -371,7 +371,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
 
     # create dataloader for offline training
 
-    if cfg.dataset.get("weights") is None:
+    if cfg.dataset.weights is None:
         raw_weights = [1.0] * len(datasets_list)
     elif isinstance(cfg.dataset.weights, (float, int)):
         raw_weights = [cfg.dataset.weights] * len(datasets_list)
@@ -381,7 +381,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     dataloaders_raw = []
     dataset_sizes = []
     for i, ds in enumerate(datasets_list):
-        if hasattr(cfg.policy, "drop_n_last_frames"):
+        if hasattr(cfg.policy, "drop_n_last_frames") and not cfg.dataset.streaming:
             shuffle = False
             sampler = EpisodeAwareSampler(
                 ds.meta.episodes["dataset_from_index"],
@@ -401,16 +401,16 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             collate_fn = getattr(module, callable_name)
             collate_fn = collate_fn(**cfg.dataset.collate_fn_params)
         suggested_num_workers = getattr(ds, "suggested_num_workers", cfg.num_workers)
-        dataloader = DataLoader(
+        dataloader = torch.utils.data.DataLoader(
             ds,
             num_workers=suggested_num_workers,
             batch_size=cfg.batch_size,
             shuffle=shuffle,
             sampler=sampler,
             collate_fn=collate_fn,
-            pin_memory=device.type == "cuda",
-            drop_last=len(datasets_list) > 1, 
-            prefetch_factor=2 if suggested_num_workers > 0 else None,
+            # pin_memory=device.type == "cuda",
+            # drop_last=len(datasets_list) > 1, 
+            # prefetch_factor=2 if suggested_num_workers > 0 else None,
         )
         dataloaders_raw.append(dataloader)
         dataset_sizes.append(ds.meta.total_frames)
@@ -553,8 +553,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                         policy=accelerator.unwrap_model(policy),
                         env_preprocessor=env_preprocessor,
                         env_postprocessor=env_postprocessor,
-                        preprocessor=preprocessor[dataloader_idx],
-                        postprocessor=postprocessor[dataloader_idx],
+                        preprocessor=preprocessor[0],
+                        postprocessor=postprocessor[0],
                         n_episodes=cfg.eval.n_episodes,
                         videos_dir=cfg.output_dir / "eval" / f"videos_step_{step_id}",
                         max_episodes_rendered=4,
@@ -607,8 +607,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                 unwrapped_policy.push_model_to_hub(cfg, peft_model=unwrapped_policy)
             else:
                 unwrapped_policy.push_model_to_hub(cfg)
-            preprocessor[0].push_to_hub(cfg.policy.repo_id)
-            postprocessor[0].push_to_hub(cfg.policy.repo_id)
+            preprocessor[dataloader_idx].push_to_hub(cfg.policy.repo_id)
+            postprocessor[dataloader_idx].push_to_hub(cfg.policy.repo_id)
 
     # Properly clean up the distributed process group
     accelerator.wait_for_everyone()
