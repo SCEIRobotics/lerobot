@@ -408,9 +408,9 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             shuffle=shuffle,
             sampler=sampler,
             collate_fn=collate_fn,
-            # pin_memory=device.type == "cuda",
-            # drop_last=len(datasets_list) > 1, 
-            # prefetch_factor=2 if suggested_num_workers > 0 else None,
+            pin_memory=device.type == "cuda",
+            drop_last=len(datasets_list) > 1, 
+            prefetch_factor=2 if suggested_num_workers > 0 else None,
         )
         dataloaders_raw.append(dataloader)
         dataset_sizes.append(ds.meta.total_frames)
@@ -553,8 +553,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                         policy=accelerator.unwrap_model(policy),
                         env_preprocessor=env_preprocessor,
                         env_postprocessor=env_postprocessor,
-                        preprocessor=preprocessor[0],
-                        postprocessor=postprocessor[0],
+                        preprocessor=preprocessor[dataloader_idx],
+                        postprocessor=postprocessor[dataloader_idx],
                         n_episodes=cfg.eval.n_episodes,
                         videos_dir=cfg.output_dir / "eval" / f"videos_step_{step_id}",
                         max_episodes_rendered=4,
