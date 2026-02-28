@@ -55,7 +55,7 @@ class FlowerConfig(PreTrainedConfig):
 
     # flower:
     # VLM Configuration
-    vlm_path: Path = '/mnt/data/share/models/Florence-2-large'
+    vlm_path: Path = 'microsoft/Florence-2-large'
     freeze_florence: bool = False
     freeze_vision_tower: bool = False
     freeze_embeddings_only: bool = True
@@ -68,7 +68,7 @@ class FlowerConfig(PreTrainedConfig):
     mixed_precision: str | None = 'bf16'
     # pretraining stuff
     load_pretrained: bool = False
-    pretrained_model_path: Path | None = '/mnt/data_ssd/share/models/flower_vla_pret/360000_model_weights.pt'
+    pretrained_model_path: Path | None = None
 
     # Model flags
     action_type_adaln: bool = True
