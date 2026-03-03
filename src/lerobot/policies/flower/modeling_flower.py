@@ -79,6 +79,10 @@ class FlowerPolicy(PreTrainedPolicy):
     def __init__(
         self,
         config: FlowerConfig,
+<<<<<<< HEAD
+=======
+        **kwargs,
+>>>>>>> origin/refactor/pretrain-flower
     ):
         """
         Args:
@@ -121,7 +125,11 @@ class FlowerPolicy(PreTrainedPolicy):
                 {"params": decay_group, "weight_decay": self.config.optimizer_weight_decay},
                 {"params": no_decay_group, "weight_decay": 0.0}
             ]
+<<<<<<< HEAD
         
+=======
+
+>>>>>>> origin/refactor/pretrain-flower
     def reset(self):
         """Clear observation and action queues. Should be called on `env.reset()`"""
         self._queues = {
@@ -175,7 +183,11 @@ class FlowerPolicy(PreTrainedPolicy):
             batch[OBS_IMAGES] = torch.stack(images, dim=-4)  # (bs, obs, cam, c, h, w)
 
         return batch
+<<<<<<< HEAD
 
+=======
+    
+>>>>>>> origin/refactor/pretrain-flower
     def process_padding(self, batch, max_action_dim):
         if ACTION in batch:
             if len(batch[ACTION].shape) == 2:
@@ -214,7 +226,11 @@ class FlowerPolicy(PreTrainedPolicy):
             )
         if state_pad>0:
             batch[f'{OBS_STATE}_mask'][..., -state_pad:] = False
+<<<<<<< HEAD
         
+=======
+
+>>>>>>> origin/refactor/pretrain-flower
         return batch
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, None]:
@@ -371,6 +387,10 @@ class FlowerModel(nn.Module):
     def _load_pretrained_weights(self, pretrained_model_path: str, mean_resizing: bool = False):
         """Loads pretrained weights, handling key mismatches (e.g., different prefixes)."""
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> origin/refactor/pretrain-flower
         print(f"Loading pretrained weights from {pretrained_model_path}...")
         # Determine file type and load accordingly
         if pretrained_model_path.suffix == ".safetensors":
@@ -620,7 +640,11 @@ class FlowerModel(nn.Module):
         vtheta, _ = self.dit_forward(zt, t, cond)
         
         # valid_mask
+<<<<<<< HEAD
         valid_mask = torch.zeros_like(trajectory, dtype=torch.bool)
+=======
+        valid_mask = torch.zeros_like(trajectory, dtype=torch.bool).to(device)
+>>>>>>> origin/refactor/pretrain-flower
         for action_name, action_idx in self.action_space_index.action_spaces.items():
             mask = (action_type == action_idx)
             if mask.any():
@@ -680,8 +704,15 @@ class FlowerModel(nn.Module):
             img_features,
             text_embeds.to(img_features.device)
         ], dim=1)
+<<<<<<< HEAD
         # Create attention mask
         prompt_mask = torch.zeros(batch_size, 1, dtype=torch.bool, device=device)
+=======
+
+        # Create attention mask
+        # attention_mask = torch.ones(merged_embeds.shape[:2], device=merged_embeds.device)
+        prompt_mask = torch.zeros(batch_size, 1, dtype=torch.bool, device=device) # 
+>>>>>>> origin/refactor/pretrain-flower
         txt_attention_mask = txt_attention_mask.to(device).squeeze(1)  # get attention mask from txt
         vis_attention_mask = torch.ones(img_features.shape[:2], device=device)  # define attention mask for image
         attention_mask = torch.cat([prompt_mask, vis_attention_mask, txt_attention_mask], dim=1)

@@ -52,11 +52,18 @@ class FlowerConfig(PreTrainedConfig):
 
     # Training presets
     training_stage: str = 'pretrain'
+<<<<<<< HEAD
     mixed_precision: str | None = None  # e.g. "bf16", "fp16", "fp32"
 
     # flower:
     # VLM Configuration
     vlm_path: Path = '/mnt/data/share/models/Florence-2-large'
+=======
+
+    # flower:
+    # VLM Configuration
+    vlm_path: Path = 'microsoft/Florence-2-large'
+>>>>>>> origin/refactor/pretrain-flower
     freeze_florence: bool = False
     freeze_vision_tower: bool = False
     freeze_embeddings_only: bool = True
@@ -66,10 +73,17 @@ class FlowerConfig(PreTrainedConfig):
     # Model Structure
     data_frequency: int = 3 # 30Hz
     device: str | None = 'cuda'
+<<<<<<< HEAD
     mixed_precision: str = 'bf16'
     # pretraining stuff
     load_pretrained: bool = False
     pretrained_model_path: Path | None = '/mnt/data_ssd/share/models/flower_vla_pret/360000_model_weights.pt'
+=======
+    mixed_precision: str | None = 'bf16'
+    # pretraining stuff
+    load_pretrained: bool = False
+    pretrained_model_path: Path | None = None
+>>>>>>> origin/refactor/pretrain-flower
 
     # Model flags
     action_type_adaln: bool = True
@@ -116,7 +130,11 @@ class FlowerConfig(PreTrainedConfig):
         # Initialize model dimensions
         if self.dit_dim % self.n_heads != 0:
             raise ValueError(f"dit_dim ({self.dit_dim}) must be divisible by n_heads ({self.n_heads})")
+<<<<<<< HEAD
         
+=======
+
+>>>>>>> origin/refactor/pretrain-flower
         if self.training_stage == 'pretrain':
             self.learning_rate_dit: float = 1e-4
             self.learning_rate_vlm: float = 2e-5

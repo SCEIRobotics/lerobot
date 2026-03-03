@@ -13,7 +13,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import os
+import dataclasses
+import importlib
 import logging
 import time
 from contextlib import nullcontext
@@ -24,6 +25,9 @@ import torch
 from accelerate import Accelerator
 from termcolor import colored
 from torch.optim import Optimizer
+from tqdm import tqdm
+import numpy as np
+import random
 
 from lerobot.configs import parser
 from lerobot.configs.train import TrainPipelineConfig
@@ -51,6 +55,7 @@ from lerobot.utils.utils import (
     format_big_number,
     has_method,
     init_logging,
+    inside_slurm,
 )
 from lerobot.utils.constants import OBS_IMAGES, OBS_STATE, ACTION, MAX_ACTION_DIM
 import torch.nn.functional as F
@@ -66,6 +71,7 @@ def update_policy(
     accelerator: Accelerator,
     lr_scheduler=None,
     lock=None,
+    rabc_weights_provider=None,
 ) -> tuple[MetricsTracker, dict]:
     """
     Performs a single training step to update the policy's weights.
@@ -82,6 +88,7 @@ def update_policy(
         accelerator: The Accelerator instance for distributed training and mixed precision.
         lr_scheduler: An optional learning rate scheduler.
         lock: An optional lock for thread-safe optimizer updates.
+        rabc_weights_provider: Optional RABCWeights instance for sample weighting.
 
     Returns:
         A tuple containing:
@@ -91,9 +98,30 @@ def update_policy(
     start_time = time.perf_counter()
     policy.train()
 
+    # Get RA-BC weights if enabled
+    rabc_batch_weights = None
+    rabc_batch_stats = None
+    if rabc_weights_provider is not None:
+        rabc_batch_weights, rabc_batch_stats = rabc_weights_provider.compute_batch_weights(batch)
+
     # Let accelerator handle mixed precision
     with accelerator.autocast():
-        loss, output_dict = policy.forward(batch)
+        # Use per-sample loss when RA-BC is enabled for proper weighting
+        if rabc_batch_weights is not None:
+            # Get per-sample losses
+            per_sample_loss, output_dict = policy.forward(batch, reduction="none")
+
+            # Apply RA-BC weights: L_RA-BC = Σ(w_i * l_i) / (Σw_i + ε)
+            # rabc_batch_weights is already normalized to sum to batch_size
+            epsilon = 1e-6
+            loss = (per_sample_loss * rabc_batch_weights).sum() / (rabc_batch_weights.sum() + epsilon)
+            # Log raw mean weight (before normalization) - this is the meaningful metric
+            output_dict["rabc_mean_weight"] = rabc_batch_stats["raw_mean_weight"]
+            output_dict["rabc_num_zero_weight"] = rabc_batch_stats["num_zero_weight"]
+            output_dict["rabc_num_full_weight"] = rabc_batch_stats["num_full_weight"]
+        else:
+            loss, output_dict = policy.forward(batch)
+
         # TODO(rcadene): policy.unnormalize_outputs(out_dict)
 
     # Use accelerator's backward method
@@ -109,21 +137,33 @@ def update_policy(
 
     # Optimizer step
     with lock if lock is not None else nullcontext():
-        optimizer.step()
+        if isinstance(optimizer, dict):
+            for opt in optimizer.values():
+                opt.step()
+        else:
+            optimizer.step()
 
-    optimizer.zero_grad()
+    if isinstance(optimizer, dict):
+        for opt in optimizer.values():
+            opt.zero_grad(set_to_none=True)
+    else:
+        optimizer.zero_grad(set_to_none=True)
 
     # Step through pytorch scheduler at every batch instead of epoch
     if lr_scheduler is not None:
-        lr_scheduler.step()
-    
+        if isinstance(lr_scheduler, dict):
+            for sched in lr_scheduler.values():
+                sched.step()
+        else:
+            lr_scheduler.step() 
+
     # Update internal buffers if policy has update method
     if has_method(accelerator.unwrap_model(policy, keep_fp32_wrapper=True), "update"):
         accelerator.unwrap_model(policy, keep_fp32_wrapper=True).update()
 
     train_metrics.loss = loss.item()
     train_metrics.grad_norm = grad_norm.item()
-    train_metrics.lr = optimizer.param_groups[0]["lr"]
+    train_metrics.lr = optimizer['dit'].param_groups[0]["lr"] if isinstance(optimizer, dict) else optimizer.param_groups[0]["lr"]
     train_metrics.update_s = time.perf_counter() - start_time
     return train_metrics, output_dict
 
@@ -155,7 +195,14 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         from accelerate.utils import DistributedDataParallelKwargs
 
         ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
-        accelerator = Accelerator(step_scheduler_with_optimizer=False, kwargs_handlers=[ddp_kwargs])
+        # Accelerate auto-detects the device based on the available hardware and ignores the policy.device setting.
+        # Force the device to be CPU when policy.device is set to CPU.
+        force_cpu = cfg.policy.device == "cpu"
+        accelerator = Accelerator(
+            step_scheduler_with_optimizer=False,
+            kwargs_handlers=[ddp_kwargs],
+            cpu=force_cpu,
+        )
 
     init_logging(accelerator=accelerator)
 
@@ -198,66 +245,106 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     # On real-world data, no need to create an environment as evaluations are done outside train.py,
     # using the eval.py instead, with gym_dora environment and dora-rs.
     eval_env = None
-    if cfg.eval_freq > 0 and cfg.env is not None:
-        if is_main_process:
-            logging.info("Creating env")
+    if cfg.eval_freq > 0 and cfg.env is not None and is_main_process:
+        logging.info("Creating env")
         eval_env = make_env(cfg.env, n_envs=cfg.eval.batch_size, use_async_envs=cfg.eval.use_async_envs)
 
     if is_main_process:
         logging.info("Creating policy")
+    
+    if isinstance(dataset, list):
+        ds_meta = [ds.meta for ds in dataset]
+    else:
+        ds_meta = dataset.meta
     policy = make_policy(
         cfg=cfg.policy,
-        ds_meta=dataset.meta,
+        ds_meta=ds_meta,
         rename_map=cfg.rename_map,
         )
+
+    if cfg.peft is not None:
+        logging.info("Using PEFT! Wrapping model.")
+        # Convert CLI peft config to dict for overrides
+        peft_cli_overrides = dataclasses.asdict(cfg.peft)
+        policy = policy.wrap_with_peft(peft_cli_overrides=peft_cli_overrides)
 
     # Wait for all processes to finish policy creation before continuing
     accelerator.wait_for_everyone()
 
     # Create processors - only provide dataset_stats if not resuming from saved processors
-    processor_kwargs = {}
-    postprocessor_kwargs = {}
-    if (cfg.policy.pretrained_path and not cfg.resume) or not cfg.policy.pretrained_path:
-        # Only provide dataset_stats when not resuming from saved processor state
-        if cfg.dataset.use_imagenet_stats:
-            from lerobot.datasets.factory import IMAGENET_STATS
-            for key in dataset.meta.camera_keys:
-                for stats_type, stats in IMAGENET_STATS.items():
-                    dataset.meta.stats[key][stats_type] = torch.tensor(stats, dtype=torch.float32)
-        processor_kwargs["dataset_stats"] = dataset.meta.stats
+    datasets_list = dataset if isinstance(dataset, list) else [dataset]
+    preprocessor = []
+    postprocessor = []
+    for ds in datasets_list:
+        processor_kwargs = {}
+        postprocessor_kwargs = {}
+
+        if (cfg.policy.pretrained_path and not cfg.resume) or not cfg.policy.pretrained_path:
+            # Only provide dataset_stats when not resuming from saved processor state
+            processor_kwargs["dataset_stats"] = ds.meta.stats
+
+        # For SARM, always provide dataset_meta for progress normalization
+        if cfg.policy.type == "sarm":
+            processor_kwargs["dataset_meta"] = ds.meta
+
+        if cfg.policy.pretrained_path is not None:
+            processor_kwargs["preprocessor_overrides"] = {
+                "device_processor": {"device": device.type},
+                "normalizer_processor": {
+                    "stats": ds.meta.stats,
+                    "features": {**policy.config.input_features, **policy.config.output_features},
+                    "norm_map": policy.config.normalization_mapping,
+                },
+                "rename_observations_processor": {
+                    "rename_map": cfg.rename_map
+                }
+            }
+            
+            postprocessor_kwargs["postprocessor_overrides"] = {
+                "unnormalizer_processor": {
+                    "stats": ds.meta.stats,
+                    "features": policy.config.output_features,
+                    "norm_map": policy.config.normalization_mapping,
+                },
+            }
+
+        pre, post = make_pre_post_processors(
+            policy_cfg=cfg.policy,
+            pretrained_path=cfg.policy.pretrained_path,
+            **processor_kwargs,
+            **postprocessor_kwargs,
+        )
         
-
-    if cfg.policy.pretrained_path is not None:
-        processor_kwargs["preprocessor_overrides"] = {
-            "device_processor": {"device": device.type},
-            "normalizer_processor": {
-                "stats": dataset.meta.stats,
-                "features": {**policy.config.input_features, **policy.config.output_features},
-                "norm_map": policy.config.normalization_mapping,
-            },
-        }
-        processor_kwargs["preprocessor_overrides"]["rename_observations_processor"] = {
-            "rename_map": cfg.rename_map
-        }
-        postprocessor_kwargs["postprocessor_overrides"] = {
-            "unnormalizer_processor": {
-                "stats": dataset.meta.stats,
-                "features": policy.config.output_features,
-                "norm_map": policy.config.normalization_mapping,
-            },
-        }
-
-    preprocessor, postprocessor = make_pre_post_processors(
-        policy_cfg=cfg.policy,
-        pretrained_path=cfg.policy.pretrained_path,
-        **processor_kwargs,
-        **postprocessor_kwargs,
-    )
+        preprocessor.append(pre)
+        postprocessor.append(post)
 
 
     if is_main_process:
         logging.info("Creating optimizer and scheduler")
     optimizer, lr_scheduler = make_optimizer_and_scheduler(cfg, policy)
+
+    # Load precomputed SARM progress for RA-BC if enabled
+    # Generate progress using: src/lerobot/policies/sarm/compute_rabc_weights.py
+    rabc_weights = None
+    if cfg.use_rabc:
+        from lerobot.utils.rabc import RABCWeights
+
+        # Get chunk_size from policy config
+        chunk_size = getattr(policy.config, "chunk_size", None)
+        if chunk_size is None:
+            raise ValueError("Chunk size is not found in policy config")
+
+        head_mode = getattr(cfg, "rabc_head_mode", "sparse")
+        logging.info(f"Loading SARM progress for RA-BC from {cfg.rabc_progress_path}")
+        logging.info(f"Using chunk_size={chunk_size} from policy config, head_mode={head_mode}")
+        rabc_weights = RABCWeights(
+            progress_path=cfg.rabc_progress_path,
+            chunk_size=chunk_size,
+            head_mode=head_mode,
+            kappa=getattr(cfg, "rabc_kappa", 0.01),
+            epsilon=getattr(cfg, "rabc_epsilon", 1e-6),
+            device=device,
+        )
 
     step = 0  # number of policy updates (forward + backward + optim)
 
@@ -266,6 +353,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
 
     num_learnable_params = sum(p.numel() for p in policy.parameters() if p.requires_grad)
     num_total_params = sum(p.numel() for p in policy.parameters())
+    ds_num_frames = sum(ds.num_frames for ds in datasets_list)
+    ds_num_episodes = sum(ds.num_episodes for ds in datasets_list)
 
     if is_main_process:
         logging.info(colored("Output dir:", "yellow", attrs=["bold"]) + f" {cfg.output_dir}")
@@ -276,8 +365,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                 env_cfg=cfg.env, policy_cfg=cfg.policy
             )
         logging.info(f"{cfg.steps=} ({format_big_number(cfg.steps)})")
-        logging.info(f"{dataset.num_frames=} ({format_big_number(dataset.num_frames)})")
-        logging.info(f"{dataset.num_episodes=}")
+        logging.info(f"{ds_num_frames=} ({format_big_number(ds_num_frames)})")
+        logging.info(f"{ds_num_episodes=}")
         num_processes = accelerator.num_processes
         gradient_accumulation_steps = accelerator.gradient_accumulation_steps
         effective_bs = cfg.batch_size * num_processes * gradient_accumulation_steps
@@ -286,36 +375,73 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         logging.info(f"{num_total_params=} ({format_big_number(num_total_params)})")
 
     # create dataloader for offline training
-    if hasattr(cfg.policy, "drop_n_last_frames"):
-        shuffle = False
-        sampler = EpisodeAwareSampler(
-            dataset.meta.episodes["dataset_from_index"],
-            dataset.meta.episodes["dataset_to_index"],
-            episode_indices_to_use=dataset.episodes,
-            drop_n_last_frames=cfg.policy.drop_n_last_frames,
-            shuffle=True,
-        )
+
+    if cfg.dataset.weights is None:
+        raw_weights = [1.0] * len(datasets_list)
+    elif isinstance(cfg.dataset.weights, (float, int)):
+        raw_weights = [cfg.dataset.weights] * len(datasets_list)
     else:
-        shuffle = True
-        sampler = None
+        raw_weights = cfg.dataset.weights
+    
+    dataloaders_raw = []
+    dataset_sizes = []
+    for i, ds in enumerate(datasets_list):
+        if hasattr(cfg.policy, "drop_n_last_frames") and not cfg.dataset.streaming:
+            shuffle = False
+            sampler = EpisodeAwareSampler(
+                ds.meta.episodes["dataset_from_index"],
+                ds.meta.episodes["dataset_to_index"],
+                episode_indices_to_use=ds.episodes,
+                drop_n_last_frames=cfg.policy.drop_n_last_frames,
+                shuffle=True,
+            )
+        else:
+            shuffle = True and not cfg.dataset.streaming
+            sampler = None
+        
+        collate_fn = None
+        if cfg.dataset.collate_fn is not None:
+            module_path, callable_name = cfg.dataset.collate_fn.rsplit('.', 1)
+            module = importlib.import_module(module_path)
+            collate_fn = getattr(module, callable_name)
+            collate_fn = collate_fn(**cfg.dataset.collate_fn_params)
+        suggested_num_workers = getattr(ds, "suggested_num_workers", cfg.num_workers)
+        dataloader = torch.utils.data.DataLoader(
+            ds,
+            num_workers=suggested_num_workers,
+            batch_size=cfg.batch_size,
+            shuffle=shuffle,
+            sampler=sampler,
+            collate_fn=collate_fn,
+            pin_memory=device.type == "cuda",
+            drop_last=len(datasets_list) > 1, 
+            prefetch_factor=2 if suggested_num_workers > 0 else None,
+        )
+        dataloaders_raw.append(dataloader)
+        dataset_sizes.append(ds.meta.total_frames)
+    
+    sample_weights = np.array(raw_weights) * np.array(dataset_sizes)
+    sample_weights = sample_weights / np.sum(sample_weights)
 
-    dataloader = torch.utils.data.DataLoader(
-        dataset,
-        num_workers=cfg.num_workers,
-        batch_size=cfg.batch_size,
-        shuffle=shuffle and not cfg.dataset.streaming,
-        sampler=sampler,
-        pin_memory=device.type == "cuda",
-        drop_last=True,
-        prefetch_factor=2 if cfg.num_workers > 0 else None,
-    )
-
-    # Prepare everything with accelerator
     accelerator.wait_for_everyone()
-    policy, optimizer, dataloader, lr_scheduler = accelerator.prepare(
-        policy, optimizer, dataloader, lr_scheduler
-    )
-    dl_iter = cycle(dataloader)
+
+    policy = accelerator.prepare(policy)
+    def prepare_component(component):
+        if isinstance(component, dict):
+            return {k: accelerator.prepare(v) for k, v in component.items()}
+        return accelerator.prepare(component)
+    
+    optimizer = prepare_component(optimizer)
+    lr_scheduler = prepare_component(lr_scheduler)
+
+    dataloaders = [accelerator.prepare(dl) for dl in dataloaders_raw]
+
+    dl_iters = [cycle(dl) for dl in dataloaders]
+    if len(dl_iters) == 1:
+        dl_iter = dl_iters[0]
+
+
+
 
     policy.train()
 
@@ -331,20 +457,35 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     effective_batch_size = cfg.batch_size * accelerator.num_processes
     train_tracker = MetricsTracker(
         effective_batch_size,
-        dataset.num_frames,
-        dataset.num_episodes,
+        ds_num_frames,
+        ds_num_episodes,
         train_metrics,
         initial_step=step,
         accelerator=accelerator,
     )
 
     if is_main_process:
-        logging.info("Start offline training on a fixed dataset")
+        progbar = tqdm(
+            total=cfg.steps - step,
+            desc="Training",
+            unit="step",
+            disable=inside_slurm(),
+            position=0,
+            leave=True,
+        )
+        logging.info(
+            f"Start offline training on a fixed dataset, with effective batch size: {effective_batch_size}"
+        )
 
     for _ in range(step, cfg.steps):
         start_time = time.perf_counter()
-        batch = next(dl_iter)
-        batch = preprocessor(batch)
+        if len(dl_iters) > 1:
+            dataloader_idx = random.choices(range(len(dataloaders)), weights=sample_weights)[0]
+            batch = next(dl_iters[dataloader_idx])
+        else:
+            dataloader_idx = 0
+            batch = next(dl_iter)
+        batch = preprocessor[dataloader_idx](batch)
         train_tracker.dataloading_s = time.perf_counter() - start_time
 
         train_tracker, output_dict = update_policy(
@@ -355,10 +496,13 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             cfg.optimizer.grad_clip_norm,
             accelerator=accelerator,
             lr_scheduler=lr_scheduler,
+            rabc_weights_provider=rabc_weights,
         )
         # Note: eval and checkpoint happens *after* the `step`th training update has completed, so we
         # increment `step` here.
         step += 1
+        if is_main_process:
+            progbar.update(1)
         train_tracker.step()
         is_log_step = cfg.log_freq > 0 and step % cfg.log_freq == 0 and is_main_process
         is_saving_step = step % cfg.save_freq == 0 or step == cfg.steps
@@ -370,6 +514,16 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                 wandb_log_dict = train_tracker.to_dict()
                 if output_dict:
                     wandb_log_dict.update(output_dict)
+                # Log RA-BC statistics if enabled
+                if rabc_weights is not None:
+                    rabc_stats = rabc_weights.get_stats()
+                    wandb_log_dict.update(
+                        {
+                            "rabc_delta_mean": rabc_stats["delta_mean"],
+                            "rabc_delta_std": rabc_stats["delta_std"],
+                            "rabc_num_frames": rabc_stats["num_frames"],
+                        }
+                    )
                 wandb_logger.log_dict(wandb_log_dict, step)
             train_tracker.reset_averages()
 
@@ -384,8 +538,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                     policy=accelerator.unwrap_model(policy),
                     optimizer=optimizer,
                     scheduler=lr_scheduler,
-                    preprocessor=preprocessor,
-                    postprocessor=postprocessor,
+                    preprocessor=preprocessor[dataloader_idx],
+                    postprocessor=postprocessor[dataloader_idx],
                 )
                 update_last_checkpoint(checkpoint_dir)
                 if wandb_logger:
@@ -403,8 +557,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                         policy=accelerator.unwrap_model(policy),
                         env_preprocessor=env_preprocessor,
                         env_postprocessor=env_postprocessor,
-                        preprocessor=preprocessor,
-                        postprocessor=postprocessor,
+                        preprocessor=preprocessor[dataloader_idx],
+                        postprocessor=postprocessor[dataloader_idx],
                         n_episodes=cfg.eval.n_episodes,
                         videos_dir=cfg.output_dir / "eval" / f"videos_step_{step_id}",
                         max_episodes_rendered=10,
@@ -426,8 +580,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                 }
                 eval_tracker = MetricsTracker(
                     cfg.batch_size,
-                    dataset.num_frames,
-                    dataset.num_episodes,
+                    ds_num_frames,
+                    ds_num_episodes,
                     eval_metrics,
                     initial_step=step,
                     accelerator=accelerator,
@@ -442,6 +596,9 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
 
             accelerator.wait_for_everyone()
 
+    if is_main_process:
+        progbar.close()
+
     if eval_env:
         close_envs(eval_env)
 
@@ -450,9 +607,12 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
 
         if cfg.policy.push_to_hub:
             unwrapped_policy = accelerator.unwrap_model(policy)
-            unwrapped_policy.push_model_to_hub(cfg)
-            preprocessor.push_to_hub(cfg.policy.repo_id)
-            postprocessor.push_to_hub(cfg.policy.repo_id)
+            if cfg.policy.use_peft:
+                unwrapped_policy.push_model_to_hub(cfg, peft_model=unwrapped_policy)
+            else:
+                unwrapped_policy.push_model_to_hub(cfg)
+            preprocessor[dataloader_idx].push_to_hub(cfg.policy.repo_id)
+            postprocessor[dataloader_idx].push_to_hub(cfg.policy.repo_id)
 
     # Properly clean up the distributed process group
     accelerator.wait_for_everyone()

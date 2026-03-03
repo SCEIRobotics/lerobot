@@ -167,9 +167,6 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         min_num_shards = min(max_num_shards, int(self.hf_dataset.num_shards / min_shards_set)) # raw max_num_shards is num_worker 
         self.num_shards = max(int(self.hf_dataset.num_shards / min_num_shards), 1) 
         self.suggested_num_workers = min_num_shards # num_workers need to smaller than min_num_shards
-        print("self.hf_dataset.num_shards:", self.hf_dataset.num_shards)
-        print("self.num_shards:", self.num_shards)
-        print("self.suggested_num_workers:", self.suggested_num_workers)
 
     def __len__(self):
         return self.meta.total_frames
@@ -223,7 +220,8 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         frames_buffer = []
         while available_shards := list(idx_to_backtrack_dataset.keys()):
             shard_key = next(self._infinite_generator_over_elements(rng, available_shards))
-            backtrack_dataset = idx_to_backtrack_dataset[shard_key]  # selects which shard to iterate on 每次随机选择一个分片
+            backtrack_dataset = idx_to_backtrack_dataset[shard_key]  # selects which shard to iterate on
+            
             try:
                 for frame in self.make_frame(backtrack_dataset):
                     # 先填1000帧，填满后再随机采样
@@ -323,8 +321,8 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         ep_idx = item["episode_index"]
 
         # "timestamp" restarts from 0 for each episode, whereas we need a global timestep within the single .mp4 file (given by index/fps)
-        # current_ts = item["index"] / self.fps  # 和原始dataset定义有冲突
-        current_ts = item["timestamp"].item()
+        # current_ts = item["index"] / self.fps  
+        current_ts = item["timestamp"] # In the _get_query_timestamps function, the starting point of each episode video is added to the timestamp.
 
         episode_boundaries_ts = {
             key: (
@@ -361,7 +359,6 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         for update in updates:
             result.update(update)
         result['sub_idx'] = self.sub_idx
-        result["valid"] = valid if len(self.meta.video_keys) > 0 else True
         result["task"] = self.meta.tasks.iloc[item["task_index"]].name
         result['robot_type'] = self.meta.info['robot_type']
         yield result
@@ -377,7 +374,7 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         for key in self.meta.video_keys:
             if query_indices is not None and key in query_indices:
                 timestamps = keys_to_timestamps[key]
-                timestamps = [ts + episode_boundaries_ts[key][0] for ts in timestamps]
+                timestamps = [ts + episode_boundaries_ts[key][0] for ts in timestamps] # Add the starting point of the episode video
                 # Clamp out timesteps outside of episode boundaries
                 query_timestamps[key] = torch.clamp(
                     torch.tensor(timestamps), *episode_boundaries_ts[key]

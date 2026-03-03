@@ -98,6 +98,7 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
                 image_transforms=image_transforms,
                 revision=cfg.dataset.revision,
                 video_backend=cfg.dataset.video_backend,
+                tolerance_s=cfg.tolerance_s,
             )
         else:
             dataset = StreamingLeRobotDataset(
@@ -108,6 +109,7 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
                 image_transforms=image_transforms,
                 revision=cfg.dataset.revision,
                 max_num_shards=cfg.num_workers,
+                tolerance_s=cfg.tolerance_s,
             )
         if cfg.dataset.use_imagenet_stats:
             for key in dataset.meta.camera_keys:
@@ -115,6 +117,8 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
                     dataset.meta.stats[key][stats_type] = torch.tensor(stats, dtype=torch.float32)
     else:
         dataset = []
+        if cfg.dataset.root is None:
+            cfg.dataset.root = [None] * len(cfg.dataset.repo_id)
         for repo_id, root in zip(cfg.dataset.repo_id, cfg.dataset.root):
             ds_meta = LeRobotDatasetMetadata(
                 repo_id, root=root, revision=cfg.dataset.revision
