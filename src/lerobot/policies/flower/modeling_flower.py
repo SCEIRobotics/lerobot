@@ -873,11 +873,6 @@ class FlowerModel(nn.Module):
         device = get_device_from_parameters(self)
         default_dtype = dtype_map[self.mixed_precision] #next(self.parameters()).dtype
         
-        for action_name, action_idx in self.action_space_index.action_spaces.items():
-            mask = (action_type == action_idx)
-            if mask.any():
-                decoded = self.action_decoders[action_name](z)
-
         batch_size = z.shape[0]
         decoded = torch.zeros(batch_size, z.shape[1], self.max_action_dim, device=device, dtype=default_dtype)
         for action_name, action_idx in self.action_space_index.action_spaces.items():
