@@ -96,6 +96,7 @@ class FlowerConfig(PreTrainedConfig):
 
     resize_h: int = 224
     resize_w: int = 224
+    robot_type: str = 'panda'
 
     def __post_init__(self):
         super().__post_init__()

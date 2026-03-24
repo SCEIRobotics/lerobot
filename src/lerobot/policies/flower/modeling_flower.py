@@ -800,7 +800,7 @@ class FlowerModel(nn.Module):
         text_prompts = []
         batch_action_index = []
         for idx, instruction in enumerate(language_instruction):
-            robot_type = 'panda'
+            robot_type = self.config.robot_type
             action_index = self.action_space_index.robot_mapping[robot_type]
             batch_action_index.append(action_index)
             instruction = generate_policy_prompt(
