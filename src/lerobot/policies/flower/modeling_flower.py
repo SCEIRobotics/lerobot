@@ -177,7 +177,7 @@ class FlowerPolicy(PreTrainedPolicy):
 
         return batch
     
-    def process_padding(self, batch, max_action_dim):
+    def process_padding(self, batch, max_action_dim, max_state_dim):
         if ACTION in batch:
             if len(batch[ACTION].shape) == 2:
                 batch[ACTION] = batch[ACTION].unsqueeze(1)
@@ -197,12 +197,13 @@ class FlowerPolicy(PreTrainedPolicy):
                 )
             if action_pad > 0:
                 batch[f'{ACTION}_mask'][..., -action_pad:] = False
+
         if len(batch[OBS_STATE].shape) == 2:
             batch[OBS_STATE] = batch[OBS_STATE].unsqueeze(1)
         bs, horizon, state_dim = batch[OBS_STATE].shape
-        if state_dim > max_action_dim:
-            raise ValueError(f"The state dimension {state_dim} exceeds the maximum allowed dimension {max_action_dim}")
-        state_pad = max_action_dim - state_dim
+        if state_dim > max_state_dim:
+            raise ValueError(f"The state dimension {state_dim} exceeds the maximum allowed dimension {max_state_dim}")
+        state_pad = max_state_dim - state_dim
         batch[OBS_STATE] = F.pad(
             batch[OBS_STATE], 
             (0, state_pad) + (0, 0) * (batch[OBS_STATE].ndim - 1), 
@@ -210,7 +211,7 @@ class FlowerPolicy(PreTrainedPolicy):
             value=0.0
             )
         batch[f'{OBS_STATE}_mask'] = torch.ones(
-            bs, max_action_dim,
+            bs, max_state_dim,
             device=batch[OBS_STATE].device, dtype=torch.bool
             )
         if state_pad>0:
@@ -222,7 +223,7 @@ class FlowerPolicy(PreTrainedPolicy):
         """Run the batch through the model and compute the loss for training or validation."""
         batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
         batch = self.preprocess_batch(batch)
-        batch = self.process_padding(batch, self.flower.max_action_dim)
+        batch = self.process_padding(batch, self.flower.max_action_dim, self.flower.max_state_dim)
         loss = self.flower.compute_loss(batch)
         # no output_dict so returning None
         return loss, None
@@ -248,7 +249,13 @@ class FlowerModel(nn.Module):
         self.vlm_latent_dim = self.config.hidden_dim
 
         # Setup DiT components
-        self.action_space_index = ActionIndex()
+        self.action_space_index = ActionIndex(
+            action_spaces=config.action_spaces,
+            action_dims=config.action_dims,
+            state_dims=config.state_dims,
+            robot_arm=config.robot_arm,
+            robot_mapping=config.robot_mapping,
+        )
         self._setup_dit_components()
         
         # Load pretrained weights if specified
@@ -256,6 +263,7 @@ class FlowerModel(nn.Module):
             self._load_pretrained_weights(config.pretrained_model_path)
         
         self.max_action_dim = self.action_space_index.get_max_action_dim()
+        self.max_state_dim = self.action_space_index.get_max_state_dim()
 
     # ========= init  ============
     def _setup_vlm(self, vlm_path: str, freeze_vision_tower: bool, freeze_florence: bool, freeze_embeddings_only: bool):
@@ -355,10 +363,11 @@ class FlowerModel(nn.Module):
                     ).to(self.device) 
 
             if self.config.use_proprio:
+                input_state_dim = self.action_space_index.get_state_dim(action_idx)
                 # Add proprio encoder if needed for bimanual nav variant otherwise use zero encoder
                 if self.action_space_index.get_num_arms(action_idx) == 2:
                     self.proprio_encoders[action_name] = Mlp(
-                    input_dim, 
+                    input_state_dim, 
                     self.config.dit_dim, 
                     out_features=self.config.dit_dim, 
                     drop=0.2
@@ -847,7 +856,7 @@ class FlowerModel(nn.Module):
         for action_name, action_idx in self.action_space_index.action_spaces.items():
             mask = (action_type == action_idx)
             if mask.any():
-                adim = self.action_space_index.get_action_dim(action_idx)
+                adim = self.action_space_index.get_state_dim(action_idx)
                 encoded_proprio[mask] = self.proprio_encoders[action_name](proprio[mask, :adim]).squeeze(1).to(default_dtype)
         return encoded_proprio
     

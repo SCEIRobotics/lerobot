@@ -399,7 +399,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             module_path, callable_name = cfg.dataset.collate_fn.rsplit('.', 1)
             module = importlib.import_module(module_path)
             collate_fn = getattr(module, callable_name)
-            collate_fn = collate_fn(**cfg.dataset.collate_fn_params)
+            collate_fn = collate_fn(cfg)
         suggested_num_workers = getattr(ds, "suggested_num_workers", cfg.num_workers)
         dataloader = torch.utils.data.DataLoader(
             ds,
@@ -434,9 +434,6 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     dl_iters = [cycle(dl) for dl in dataloaders]
     if len(dl_iters) == 1:
         dl_iter = dl_iters[0]
-
-
-
 
     policy.train()
 

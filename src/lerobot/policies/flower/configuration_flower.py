@@ -97,6 +97,52 @@ class FlowerConfig(PreTrainedConfig):
     resize_h: int = 224
     resize_w: int = 224
     robot_type: str = 'panda'
+    gradient_accumulation_steps: int = 2
+    action_spaces: dict[str, int] = field(
+        default_factory=lambda: {
+            'joint_single': 0,  # Single arm joint position control (type 0)
+            'eef_delta': 1,    # Single arm end-effector velocity (type 1) 
+            'bimanual_nav': 2, # Bimanual with navigation (type 2),
+            # 'nav': 3,         # Navigation (type 3)
+            'bimanual': 3,
+            }
+        )
+    
+    action_dims: dict[str, int] = field(
+        default_factory=lambda: {
+            'joint_single': 8,  # Single arm joint position control (type 0)
+            'eef_delta': 7,    # Single arm end-effector velocity (type 1) 
+            'bimanual_nav': 16, # Bimanual with navigation (type 2),
+            # 'nav': 2,         # Navigation (type 3)
+            'bimanual': 14,
+            }
+        )
+    
+    state_dims: dict[str, int] = field(
+        default_factory=lambda: {
+            'joint_single': 8,  # Single arm joint position control (type 0)
+            'eef_delta': 7,    # Single arm end-effector velocity (type 1) 
+            'bimanual_nav': 16, # Bimanual with navigation (type 2),
+            # 'nav': 2,         # Navigation (type 3)
+            'bimanual': 14,
+            }
+        )
+    
+    robot_arm: dict[str, int] = field(
+        default_factory=lambda:{
+            'joint_single': 1,  # Single arm joint position control (type 0)
+            'eef_delta': 1,    # Single arm end-effector velocity (type 1) 
+            'bimanual_nav': 2, # Bimanual with navigation (type 2),
+            # 'nav': 2,         # Navigation (type 3)
+            'bimanual': 2,
+            }
+        )
+    robot_mapping: dict[str, int] = field(
+        default_factory=lambda:{
+            'panda': 0,
+        }
+    )
+
 
     def __post_init__(self):
         super().__post_init__()

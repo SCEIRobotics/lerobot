@@ -77,47 +77,13 @@ def generate_policy_prompt(
 class ActionIndex:
     """Registry for managing action spaces with robot type and control mode distinctions."""
 
-    def __init__(self):
+    def __init__(self, action_spaces:dict, action_dims:dict, state_dims:dict, robot_arm:dict, robot_mapping:dict):
         # Define action spaces with their dimensions
-        self.action_spaces = {
-            'joint_single': 0,  # Single arm joint position control (type 0)
-            'eef_delta': 1,    # Single arm end-effector velocity (type 1) 
-            'bimanual_nav': 2, # Bimanual with navigation (type 2),
-            # 'nav': 3,         # Navigation (type 3)
-            'bimanual': 3,
-        }
-        
-        self.action_dims = {
-            'joint_single': 8,  # Single arm joint position control (type 0)
-            'eef_delta': 7,    # Single arm end-effector velocity (type 1) 
-            'bimanual_nav': 16, # Bimanual with navigation (type 2),
-            # 'nav': 2,         # Navigation (type 3)
-            'bimanual': 14,
-        }
-
-        self.robot_arm = {
-            'joint_single': 1,  # Single arm joint position control (type 0)
-            'eef_delta': 1,    # Single arm end-effector velocity (type 1) 
-            'bimanual_nav': 2, # Bimanual with navigation (type 2),
-            # 'nav': 2,         # Navigation (type 3)
-            'bimanual': 2,
-        }
-
-        self.robot_mapping = {
-            # "Google Robot": 1,
-            # "unknown": 1,
-            # "Franka": 0, 
-            'aloha': 3,
-            "panda": 1,
-
-            'piper': 2,
-
-            'franka': 0,
-            'lift2': 3,
-            'split_aloha': 3,
-            'aloha': 3,
-            'genie1': 2,
-        }
+        self.action_spaces = action_spaces
+        self.action_dims = action_dims
+        self.state_dims = state_dims
+        self.robot_arm = robot_arm
+        self.robot_mapping = robot_mapping
 
         # Create mapping from (robot_type, control_mode, num_arms) to action type
         self.action_space_mapping = {
@@ -153,6 +119,11 @@ class ActionIndex:
         dims = list(self.action_dims.values())
         return dims[index]
     
+    def get_state_dim(self, index: int) -> int:
+        """Get state dimension for a given state type index."""
+        dims = list(self.state_dims.values())
+        return dims[index]
+    
     def get_num_arms(self, index: int) -> int:
         """Get number of arms for a given action type index."""
         num_arms = list(self.robot_arm.values())
@@ -168,6 +139,10 @@ class ActionIndex:
     def get_max_action_dim(self) -> int:
         """Get maximum action dimension across all types.""" 
         return max(self.action_dims.values())
+    
+    def get_max_state_dim(self) -> int:
+        """Get maximum state dimension across all types.""" 
+        return max(self.state_dims.values())
 
     def get_action_mask(self, action_type: int) -> List[bool]:
         """Get mask for which dimensions are active for this action type."""
@@ -182,10 +157,16 @@ class ActionIndex:
 
 
 class FlowerDataCollator:
-    def __init__(self, vlm_path):
-        self.processor = AutoProcessor.from_pretrained(vlm_path, trust_remote_code=True)
+    def __init__(self, cfg):
+        self.processor = AutoProcessor.from_pretrained(cfg.policy.vlm_path, trust_remote_code=True)
         self.tokenizer = self.processor.tokenizer
-        self.action_space_index = ActionIndex()
+        self.action_space_index = ActionIndex(
+            action_spaces=cfg.policy.action_spaces,
+            action_dims=cfg.policy.action_dims,
+            state_dims=cfg.policy.state_dims,
+            robot_arm=cfg.policy.robot_arm,
+            robot_mapping=cfg.policy.robot_mapping,
+        )
 
     def __call__(self, batch):
         task_batch = []
