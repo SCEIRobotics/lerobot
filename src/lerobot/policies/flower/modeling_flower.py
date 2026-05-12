@@ -67,6 +67,7 @@ dtype_map = {
     'no': torch.float32
 }
 
+
 class FlowerPolicy(PreTrainedPolicy):
     """
     Flower Policy as per "FLOWER: Democratizing Generalist Robot Policies with Efficient Vision-Language-Action Flow Policies"
@@ -631,13 +632,9 @@ class FlowerModel(nn.Module):
         vtheta, _ = self.dit_forward(zt, t, cond)
         
         # valid_mask
-        valid_mask = torch.zeros_like(trajectory, dtype=torch.bool).to(device)
-        for action_name, action_idx in self.action_space_index.action_spaces.items():
-            mask = (action_type == action_idx)
-            if mask.any():
-                adim = self.action_space_index.get_action_dim(action_idx)
-                valid_mask[mask, :, :adim] = True
-        
+        valid_mask = batch[f'{ACTION}_mask']
+        valid_mask = valid_mask.unsqueeze(1).expand(-1, trajectory.size(1), -1)
+
         # Compute loss on valid dimensions only
         diff = (z1 - trajectory) - vtheta
         valid_diff = torch.where(
