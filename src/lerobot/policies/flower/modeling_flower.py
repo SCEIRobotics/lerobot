@@ -60,7 +60,7 @@ from lerobot.policies.flower.transformers_flower import (
     FlowBlock, 
     stateless_norm
 )
-
+from lerobot.policies.flower.florence2_model.modeling_florence2 import Florence2ForConditionalGeneration
 
 dtype_map = {
     'bf16': torch.bfloat16,
@@ -270,8 +270,11 @@ class FlowerModel(nn.Module):
     def _setup_vlm(self, vlm_path: str, freeze_vision_tower: bool, freeze_florence: bool, freeze_embeddings_only: bool):
         """Initialize and configure the Florence-2 VLM"""
         print(f"Loading Florence-2 from {vlm_path}")
-        
-        self.vlm = AutoModelForCausalLM.from_pretrained(vlm_path, trust_remote_code=True)
+        if self.config.training_stage == "infer":
+            vlm_config = AutoConfig.from_pretrained(vlm_path, trust_remote_code=True)
+            self.vlm = Florence2ForConditionalGeneration(vlm_config)
+        else:
+            self.vlm = AutoModelForCausalLM.from_pretrained(vlm_path, trust_remote_code=True)
         
         # Handle parameter freezing
         if freeze_florence:
