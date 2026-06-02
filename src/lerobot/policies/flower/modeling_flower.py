@@ -154,7 +154,7 @@ class FlowerPolicy(PreTrainedPolicy):
         if self.config.image_features:
             batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original     
             batch = self.preprocess_batch(batch)
-        batch = self.process_padding(batch, self.flower.max_action_dim)
+        batch = self.process_padding(batch, self.flower.max_action_dim, self.flower.max_state_dim)
         
         if len(self._queues[ACTION]) == 0:
             actions = self.predict_action_chunk(batch, noise=noise)
