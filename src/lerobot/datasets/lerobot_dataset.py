@@ -82,7 +82,7 @@ from lerobot.utils.constants import HF_LEROBOT_HOME
 CODEBASE_VERSION = "v3.0"
 import torchvision
 import random
-
+import torchvision.transforms as T
 
 class LeRobotDatasetMetadata:
     def __init__(
@@ -163,7 +163,7 @@ class LeRobotDatasetMetadata:
 
     def load_metadata(self):
         self.info = load_info(self.root)
-        check_version_compatibility(self.repo_id, self._version, CODEBASE_VERSION)
+        # check_version_compatibility(self.repo_id, self._version, CODEBASE_VERSION)
         self.tasks = load_tasks(self.root)
         self.subtasks = load_subtasks(self.root)
         self.episodes = load_episodes(self.root)
@@ -582,6 +582,9 @@ class LeRobotDataset(torch.utils.data.Dataset):
         streaming_encoding: bool = False,
         encoder_queue_maxsize: int = 30,
         encoder_threads: int | None = None,
+        keep_in_memory: bool = False,
+        load_columns: list[str] | None = None,
+        resize: tuple[int, int] | None = None,
     ):
         """
         2 modes are available for instantiating this class, depending on 2 different use cases:
@@ -720,6 +723,13 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self.vcodec = resolve_vcodec(vcodec)
         self._encoder_threads = encoder_threads
 
+        self.keep_in_memory = keep_in_memory
+        self.load_columns = load_columns
+        if resize is not None:
+            self.resize = T.Resize((int(resize[0]), int(resize[1])))
+        else:
+            self.resize = None
+        
         # Unused attributes
         self.image_writer = None
         self.episode_buffer = None
@@ -892,8 +902,9 @@ class LeRobotDataset(torch.utils.data.Dataset):
 
     def load_hf_dataset(self) -> datasets.Dataset:
         """hf_dataset contains all the observations, states, actions, rewards, etc."""
-        features = get_hf_features_from_features(self.features)
-        hf_dataset = load_nested_dataset(self.root / "data", features=features, episodes=self.episodes)
+        features = get_hf_features_from_features(self.features, load_columns=self.load_columns)
+        hf_dataset = load_nested_dataset(self.root / "data", features=features, episodes=self.episodes, 
+                                         keep_in_memory=self.keep_in_memory, load_columns=self.load_columns)
         hf_dataset.set_transform(hf_transform_to_torch)
         return hf_dataset
 
@@ -1105,6 +1116,8 @@ class LeRobotDataset(torch.utils.data.Dataset):
             image_keys = self.meta.camera_keys
             for cam in image_keys:
                 item[cam] = self.image_transforms(item[cam])
+                if self.resize is not None:
+                    item[cam] = self.resize(item[cam])
 
         # Add task as a string
         task_idx = item["task_index"].item()

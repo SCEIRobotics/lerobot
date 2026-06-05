@@ -42,7 +42,7 @@ class FlowerConfig(PreTrainedConfig):
 
     # The original implementation doesn't sample frames for the last 7 steps,
     # which avoids excessive padding and leads to improved training results.
-    drop_n_last_frames: int = 0 # horizon - n_action_steps - n_obs_steps + 1
+    # drop_n_last_frames: int = 0 # horizon - n_action_steps - n_obs_steps + 1
 
     # Inference
     num_inference_steps: int | None = 4  # num_sampling_steps=4
@@ -94,8 +94,8 @@ class FlowerConfig(PreTrainedConfig):
     query_seq_len: int = 100
     rope_theta: float = 32.0
 
-    resize_h: int = 224
-    resize_w: int = 224
+    resize_h: int | None = 224
+    resize_w: int | None = 224
     robot_type: str = 'panda'
     gradient_accumulation_steps: int = 2
     action_spaces: dict[str, int] = field(

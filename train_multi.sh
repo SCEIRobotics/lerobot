@@ -49,20 +49,21 @@ accelerate launch \
   $(which lerobot-train) \
   --dataset.repo_id="${repo_ids}" \
   --dataset.root="${roots}" \
-  --dataset.streaming=true \
   --dataset.collate_fn=lerobot.policies.flower.utils.FlowerDataCollator \
   --dataset.image_transforms.enable=true \
+  --dataset.use_shard=true \
+  --dataset.keep_in_memory=true \
+  --dataset.load_columns="['observation.state', 'action', 'episode_index', 'frame_index', 'timestamp', 'index', 'task_index']" \
+  --dataset.resize='["224", "224"]' \
   --policy.type=flower \
   --policy.training_stage=pretrain \
   --policy.freeze_embeddings_only=true \
   --policy.vlm_path=/mnt/data/share/models/Florence-2-large \
   --policy.horizon=64 \
   --policy.n_action_steps=64 \
-  --policy.resize_h=224 \
-  --policy.resize_w=224 \
   --policy.device=cuda \
   --policy.push_to_hub=false \
-  --policy.gradient_accumulation_steps=8 \
+  --policy.gradient_accumulation_steps=2 \
   --policy.action_spaces='{"joint_single":0, "bimanual":1, "bimanual_nav":2}' \
   --policy.action_dims='{"joint_single":8, "bimanual":14, "bimanual_nav":16}' \
   --policy.state_dims='{"joint_single":8, "bimanual":14, "bimanual_nav":16}' \

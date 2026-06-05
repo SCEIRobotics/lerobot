@@ -98,8 +98,11 @@ class FlowerPolicy(PreTrainedPolicy):
 
         self.flower = FlowerModel(config)
         self.reset()
-
-        self.resize = torchvision.transforms.Resize((config.resize_h, config.resize_w))
+        
+        if config.resize_h is not None and config.resize_w is not None:
+            self.resize = torchvision.transforms.Resize((config.resize_h, config.resize_w))
+        else:
+            self.resize = None
 
     def get_optim_params(self) -> dict:
         """Get parameter groups for optimizer"""
@@ -169,10 +172,11 @@ class FlowerPolicy(PreTrainedPolicy):
             for key in self.config.image_features:
                 if key in batch:
                     image = batch[key] if len(batch[key].shape)==5 else batch[key].unsqueeze(1)
-                    bs, obs, c, h, w = image.shape
-                    image = image.view(bs*obs, c, h, w)
-                    image = self.resize(image)
-                    image = image.view(bs, obs, c, self.config.resize_h, self.config.resize_w)
+                    if self.resize is not None:
+                        bs, obs, c, h, w = image.shape
+                        image = image.view(bs*obs, c, h, w)
+                        image = self.resize(image)
+                        image = image.view(bs, obs, c, self.config.resize_h, self.config.resize_w)
                     images.append(image)
             batch[OBS_IMAGES] = torch.stack(images, dim=-4)  # (bs, obs, cam, c, h, w)
 
@@ -679,6 +683,11 @@ class FlowerModel(nn.Module):
         
         # Get text embeddings
         # Get text embeddings once to reuse
+        # constructed_prompts = self.construct_prompts(batch)
+        # text_embeds = self._get_text_embeddings(constructed_prompts, device)
+        # # Add task prompt and aggregation tokens
+        # task_prompt = self.prompt_embeds.expand(batch_size, -1, -1)
+
         batch_action_index = batch['action_index'].to(device)
         text_embeds = self._get_text_embeddings_new(batch['text_input_ids'], device)
         txt_attention_mask = batch['text_attention_mask'].to(device)
