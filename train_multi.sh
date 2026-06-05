@@ -49,7 +49,6 @@ accelerate launch \
   $(which lerobot-train) \
   --dataset.repo_id="${repo_ids}" \
   --dataset.root="${roots}" \
-  --dataset.collate_fn=lerobot.policies.flower.utils.FlowerDataCollator \
   --dataset.image_transforms.enable=true \
   --dataset.use_shard=true \
   --dataset.keep_in_memory=true \

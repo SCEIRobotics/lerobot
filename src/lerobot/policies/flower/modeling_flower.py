@@ -682,15 +682,8 @@ class FlowerModel(nn.Module):
             )
         
         # Get text embeddings
-        # Get text embeddings once to reuse
-        # constructed_prompts = self.construct_prompts(batch)
-        # text_embeds = self._get_text_embeddings(constructed_prompts, device)
-        # # Add task prompt and aggregation tokens
-        # task_prompt = self.prompt_embeds.expand(batch_size, -1, -1)
-
-        batch_action_index = batch['action_index'].to(device)
-        text_embeds = self._get_text_embeddings_new(batch['text_input_ids'], device)
-        txt_attention_mask = batch['text_attention_mask'].to(device)
+        constructed_prompts, batch_action_index = self.construct_prompts(batch)
+        text_embeds, txt_attention_mask = self._get_text_embeddings(constructed_prompts, device)
         # Add task prompt and aggregation tokens
         task_prompt = self.prompt_embeds.expand(batch_size, -1, -1)
         
@@ -813,41 +806,71 @@ class FlowerModel(nn.Module):
     
         return prompt_embed.unsqueeze(0).unsqueeze(0)
 
-    def construct_prompts(self, tasks):
-        language_instruction = tasks
+    def construct_prompts(self, dataset_batch):
+        """
+        Constructs prompts for Florence-2's encoder to extract task-relevant visual features.
+        
+        Args:
+            dataset_batch: Dictionary containing task information including language instructions
+            
+        Returns:
+            text_prompts: List of formatted prompts for encoder conditioning
+        """
+    
+        language_instruction = dataset_batch["task"]
+        robot_types = dataset_batch["robot_type"]
+
         text_prompts = []
-        batch_action_index = []
-        for idx, instruction in enumerate(language_instruction):
-            robot_type = self.config.robot_type
+        action_index_list = []
+        for instruction, robot_type in zip(language_instruction, robot_types):
             action_index = self.action_space_index.robot_mapping[robot_type]
-            batch_action_index.append(action_index)
-            instruction = generate_policy_prompt(
-                instruction,
-                robot_name=robot_type,
-                num_arms=self.action_space_index.get_num_arms(action_index),
-                action_space=f"{self.action_space_index.get_action_dim(action_index)}D continuous",
-                prompt_style="minimal",
-                include_meta=True
-                )
-            text_prompts.append(instruction)
-        batch_action_index = torch.tensor(batch_action_index)
+            num_arms = self.action_space_index.get_num_arms(action_index)
+            action_space = f"{self.action_space_index.get_action_dim(action_index)}D continuous"
+
+            if self.config.vlm_prompt_style == "default":
+                # Original instruction only
+                text_prompt = generate_policy_prompt(
+                    instruction,
+                    robot_name=robot_type,
+                    num_arms=num_arms,
+                    action_space=action_space,
+                    prompt_style="minimal"
+                    )
+                print(text_prompt)
+                text_prompts.append(text_prompt)
+                action_index_list.append(action_index)
+              
+            elif self.config.vlm_prompt_style == "feature_focused":
+                # Focus on extracting visual features relevant for manipulation
+                prompt = f"<od>{instruction}</od><grounding>identify objects and spatial relationships for robotic manipulation</grounding>"
+                text_prompts.append(prompt)
+                action_index_list.append(action_index)
+                
+            elif self.config.vlm_prompt_style == "state_oriented":
+                # Focus on extracting state-relevant features
+                prompt = f"<od>{instruction}</od><referring_expression_segmentation>locate objects and regions for manipulation</referring_expression_segmentation>"
+                text_prompts.append(prompt)
+                action_index_list.append(action_index)
+                
+            else:
+                raise ValueError(f"Unknown prompt style: {self.config.vlm_prompt_style}")
+        
+        batch_action_index = torch.tensor(action_index_list)
         return text_prompts, batch_action_index
-    
-    def _get_text_inputs(self, constructed_prompts):
-        text_inputs = self.tokenizer(
-                constructed_prompts,
-                return_tensors="pt",
-                padding="max_length",
-                truncation=True,
-                max_length=77
-            )
-        return text_inputs
-    
-    def _get_text_embeddings_new(self, text_inputs, device):
+
+    def _get_text_embeddings(self, text, device):
         """Get text embeddings to use with VLM"""
-        text_inputs = text_inputs.to(device)
-        text_embeds = self.vlm.get_input_embeddings()(text_inputs)
-        return text_embeds
+        text_inputs = self.tokenizer(
+            text,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=77
+        ).to(device)
+        
+        text_embeds = self.vlm.get_input_embeddings()(text_inputs["input_ids"])
+        text_attention_masks = text_inputs.data["attention_mask"]
+        return text_embeds, text_attention_masks
     
     def encode_proprio(self, proprio: torch.Tensor, action_type: torch.Tensor, output_shape) -> torch.Tensor:
         """
