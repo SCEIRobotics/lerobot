@@ -163,7 +163,7 @@ class LeRobotDatasetMetadata:
 
     def load_metadata(self):
         self.info = load_info(self.root)
-        # check_version_compatibility(self.repo_id, self._version, CODEBASE_VERSION)
+        check_version_compatibility(self.repo_id, self._version, CODEBASE_VERSION)
         self.tasks = load_tasks(self.root)
         self.subtasks = load_subtasks(self.root)
         self.episodes = load_episodes(self.root)

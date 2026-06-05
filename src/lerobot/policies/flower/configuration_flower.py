@@ -94,8 +94,8 @@ class FlowerConfig(PreTrainedConfig):
     query_seq_len: int = 100
     rope_theta: float = 32.0
 
-    resize_h: int | None = 224
-    resize_w: int | None = 224
+    resize_h: int | None = None
+    resize_w: int | None = None
     robot_type: str = 'panda'
     gradient_accumulation_steps: int = 2
     action_spaces: dict[str, int] = field(
