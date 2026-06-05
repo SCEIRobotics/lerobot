@@ -143,6 +143,8 @@ class FlowerConfig(PreTrainedConfig):
         }
     )
 
+    robot_action_dim: dict[str, int] | None = None
+    robot_num_arms: dict[str, int] | None = None
 
     def __post_init__(self):
         super().__post_init__()

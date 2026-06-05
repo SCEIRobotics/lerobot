@@ -260,6 +260,8 @@ class FlowerModel(nn.Module):
             state_dims=config.state_dims,
             robot_arm=config.robot_arm,
             robot_mapping=config.robot_mapping,
+            robot_action_dim=config.robot_action_dim,
+            robot_num_arms=config.robot_num_arms,
         )
         self._setup_dit_components()
         
@@ -824,8 +826,15 @@ class FlowerModel(nn.Module):
         action_index_list = []
         for instruction, robot_type in zip(language_instruction, robot_types):
             action_index = self.action_space_index.robot_mapping[robot_type]
-            num_arms = self.action_space_index.get_num_arms(action_index)
-            action_space = f"{self.action_space_index.get_action_dim(action_index)}D continuous"
+
+            if self.action_space_index.robot_action_dim is None:
+                action_space = f"{self.action_space_index.get_action_dim(action_index)}D continuous"
+            else:
+                action_space = f"{self.action_space_index.robot_action_dim[robot_type]}D continuous"
+            if self.action_space_index.robot_num_arms is None:
+                num_arms = self.action_space_index.get_num_arms(action_index)
+            else:
+                num_arms = self.action_space_index.robot_num_arms[robot_type]
 
             if self.config.vlm_prompt_style == "default":
                 # Original instruction only
@@ -836,7 +845,7 @@ class FlowerModel(nn.Module):
                     action_space=action_space,
                     prompt_style="minimal"
                     )
-                print(text_prompt)
+                # print(text_prompt)
                 text_prompts.append(text_prompt)
                 action_index_list.append(action_index)
               

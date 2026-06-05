@@ -63,14 +63,26 @@ accelerate launch \
   --policy.device=cuda \
   --policy.push_to_hub=false \
   --policy.gradient_accumulation_steps=2 \
-  --policy.action_spaces='{"joint_single":0, "bimanual":1, "bimanual_nav":2}' \
-  --policy.action_dims='{"joint_single":8, "bimanual":14, "bimanual_nav":16}' \
-  --policy.state_dims='{"joint_single":8, "bimanual":14, "bimanual_nav":16}' \
-  --policy.robot_arm='{"joint_single":1, "bimanual":2, "bimanual_nav":2}' \
+  --policy.action_spaces='{"padding":0}' \
+  --policy.action_dims='{"padding":32}' \
+  --policy.state_dims='{"padding":32}' \
+  --policy.robot_arm='{"padding":2}' \
   --policy.robot_mapping='{
     "franka":0,
-    "aloha": 1, 
-    "lift2": 1, 
+    "aloha": 0, 
+    "lift2": 0, 
+    "genie1": 0,
+    }' \
+  --policy.robot_action_dim='{
+    "franka":8,
+    "aloha": 14, 
+    "lift2": 14, 
+    "genie1": 16,
+    }' \
+  --policy.robot_num_arms='{
+    "franka":1,
+    "aloha": 2, 
+    "lift2": 2, 
     "genie1": 2,
     }' \
   --batch_size=64 \

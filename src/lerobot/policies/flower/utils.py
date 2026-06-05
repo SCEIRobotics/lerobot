@@ -77,13 +77,25 @@ def generate_policy_prompt(
 class ActionIndex:
     """Registry for managing action spaces with robot type and control mode distinctions."""
 
-    def __init__(self, action_spaces:dict, action_dims:dict, state_dims:dict, robot_arm:dict, robot_mapping:dict):
+    def __init__(
+            self, 
+            action_spaces: dict, 
+            action_dims: dict, 
+            state_dims: dict, 
+            robot_arm: dict, 
+            robot_mapping: dict,
+            robot_num_arms:  dict | None = None,
+            robot_action_dim: dict | None = None,
+            ):
         # Define action spaces with their dimensions
         self.action_spaces = action_spaces
         self.action_dims = action_dims
         self.state_dims = state_dims
         self.robot_arm = robot_arm
         self.robot_mapping = robot_mapping
+
+        self.robot_num_arms = robot_num_arms
+        self.robot_action_dim = robot_action_dim
 
         # Create mapping from (robot_type, control_mode, num_arms) to action type
         self.action_space_mapping = {
