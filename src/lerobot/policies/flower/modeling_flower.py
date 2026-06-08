@@ -651,8 +651,10 @@ class FlowerModel(nn.Module):
             diff, 
             torch.tensor(0.0, device=diff.device)
             )
-        loss = (valid_diff ** 2)  # l2
-        # loss = torch.abs(valid_diff)  # l1
+        if self.config.use_l2_loss:
+            loss = (valid_diff ** 2) # l2
+        else:
+            loss = torch.abs(valid_diff)  # l1
         # Mask loss wherever the action is padded with copies (edges of the dataset trajectory).
         if self.config.do_mask_loss_for_padding:
             if "action_is_pad" not in batch:

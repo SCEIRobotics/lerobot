@@ -96,8 +96,9 @@ class FlowerConfig(PreTrainedConfig):
 
     resize_h: int | None = None
     resize_w: int | None = None
-    robot_type: str = 'panda'
+    use_l2_loss: bool = True
     gradient_accumulation_steps: int = 2
+
     action_spaces: dict[str, int] = field(
         default_factory=lambda: {
             'joint_single': 0,  # Single arm joint position control (type 0)
@@ -137,6 +138,7 @@ class FlowerConfig(PreTrainedConfig):
             'bimanual': 2,
             }
         )
+    
     robot_mapping: dict[str, int] = field(
         default_factory=lambda:{
             'panda': 0,
