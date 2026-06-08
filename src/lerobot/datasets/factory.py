@@ -99,6 +99,9 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
                 revision=cfg.dataset.revision,
                 video_backend=cfg.dataset.video_backend,
                 tolerance_s=cfg.tolerance_s,
+                keep_in_memory=cfg.dataset.keep_in_memory,
+                load_columns=cfg.dataset.load_columns,
+                resize=cfg.dataset.resize,
             )
         else:
             dataset = StreamingLeRobotDataset(
@@ -133,6 +136,10 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
                     image_transforms=image_transforms,
                     revision=cfg.dataset.revision,
                     video_backend=cfg.dataset.video_backend,
+                    tolerance_s=cfg.tolerance_s,
+                    keep_in_memory=cfg.dataset.keep_in_memory,
+                    load_columns=cfg.dataset.load_columns,
+                    resize=cfg.dataset.resize,
                 )
             else:
                 ds = StreamingLeRobotDataset(
@@ -143,6 +150,7 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
                     image_transforms=image_transforms,
                     revision=cfg.dataset.revision,
                     max_num_shards=cfg.num_workers,
+                    tolerance_s=cfg.tolerance_s
                 )
             if cfg.dataset.use_imagenet_stats:
                 for key in ds.meta.camera_keys:

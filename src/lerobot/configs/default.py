@@ -37,6 +37,10 @@ class DatasetConfig:
     weights: list[float] | float | None = None
     collate_fn: str | None = None
     collate_fn_params: dict = field(default_factory=dict)
+    keep_in_memory: bool = False
+    load_columns: list[str] | None = None
+    resize: list[int] | None = None
+    use_shard: bool = False
 
 
 @dataclass

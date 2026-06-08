@@ -1,38 +1,97 @@
 #!/bin/bash
-export CUDA_VISIBLE_DEVICES=3,4
 
-# export MUJOCO_GL=egl # 强制 MuJoCo 使用 EGL 渲染（关键）
-# export PYOPENGL_PLATFORM=egl # 禁用 GLFW 图形窗口（避免初始化错误）
+export CUDA_VISIBLE_DEVICES=0,1
+
+# export MUJOCO_GL=egl
+# export PYOPENGL_PLATFORM=egl
 # export EGL_DEVICE_ID=0
-
+export HF_HOME=/mnt/data/cache/huggingface
+export HYDRA_FULL_ERROR=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True 
 export TOKENIZERS_PARALLELISM=false
-export WANDB_MODE=offline  # 强制离线记录, 但是lerobot默认是online的, 需要设置wandb.mode=offline
-export WANDB_API_KEY=7a17221f579b43949e05faf2a9120c5a6b6506e5
-TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 
-accelerate launch --config_file multi_gpu.yaml \
- ./src/lerobot/scripts/lerobot_train_multi.py \
-    --dataset.root='["/mnt/data/hanmingyan/code/hmy_data_tools/interna1_merge_all/interna1_franka_processed_diff_merge", "/mnt/data/hanmingyan/code/hmy_data_tools/interna1_merge_all/interna1_franka_processed_same_merge"]' \
-    --dataset.repo_id='["interna1_merge_all/interna1_franka_processed_diff_merge", "interna1_merge_all/interna1_franka_processed_same_merge"]' \
-    --dataset.streaming=true \
-    --dataset.requires_padding=true \
-    --policy.type=flower \
-    --policy.n_obs_steps=1 \
-    --policy.horizon=64 \
-    --policy.n_action_steps=60 \
-    --policy.push_to_hub=false \
-    --policy.device=cuda \
-    --policy.vlm_path='/mnt/data/share/models/Florence-2-large' \
-    --policy.freeze_embeddings_only=true \
-    --policy.load_pretrained=false \
-    --policy.pretrained_model_path='/mnt/data_ssd/share/models/flower_vla_pret/360000_model_weights.pt' \
-    --policy.resize_h=224 \
-    --policy.resize_w=224 \
-    --batch_size=64 \
-    --num_workers=4 \
-    --steps=1600000 \
-    --save_freq=20000 \
-    --output_dir=./outputs/train-a1-tmp-${TIMESTAMP} \
-    --wandb.enable=true \
-    --wandb.disable_artifact=true \
-    --wandb.mode=offline \
+
+REPO_ID_LIST=()
+ROOT_LIST=()
+DATA_DIR_1=/mnt/data/share/datasets/InternRobotics/InternData-A1/interna1_merge_all #
+
+select_dataset=(
+    interna1_franka_processed_diff_merge
+    interna1_franka_processed_same_merge
+    interna1_genie1_processed_merge
+    interna1_lift2_processed_diff
+    interna1_lift2_processed_same_merge
+    interna1_split_aloha_processed_merge
+)
+
+for dir in "$DATA_DIR_1"/*/; do
+    folder_name=$(basename "${dir%/}")
+    if [[ ! " ${select_dataset[@]} " =~ " ${folder_name} " ]]; then
+        continue
+    fi
+    ROOT_LIST+=("${DATA_DIR_1}/${folder_name}")
+    REPO_ID_LIST+=("dual/${folder_name}")
+done
+
+
+joined_repo_id=$(printf '"%s",' "${REPO_ID_LIST[@]}" | sed 's/,$//')
+repo_ids='['"$joined_repo_id"']'
+
+joined_root=$(printf '"%s",' "${ROOT_LIST[@]}" | sed 's/,$//')
+roots='['"$joined_root"']'
+
+
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+accelerate launch \
+  --multi_gpu \
+  --num_processes=2 \
+  --mixed_precision=bf16 \
+  $(which lerobot-train) \
+  --dataset.repo_id="${repo_ids}" \
+  --dataset.root="${roots}" \
+  --dataset.image_transforms.enable=true \
+  --dataset.use_shard=true \
+  --dataset.keep_in_memory=true \
+  --dataset.load_columns="['observation.state', 'action', 'episode_index', 'frame_index', 'timestamp', 'index', 'task_index']" \
+  --dataset.resize='["224", "224"]' \
+  --policy.type=flower \
+  --policy.training_stage=pretrain \
+  --policy.freeze_embeddings_only=true \
+  --policy.vlm_path=/mnt/data/share/models/Florence-2-large \
+  --policy.horizon=64 \
+  --policy.n_action_steps=64 \
+  --policy.device=cuda \
+  --policy.push_to_hub=false \
+  --policy.gradient_accumulation_steps=2 \
+  --policy.action_spaces='{"padding":0}' \
+  --policy.action_dims='{"padding":32}' \
+  --policy.state_dims='{"padding":32}' \
+  --policy.robot_arm='{"padding":2}' \
+  --policy.robot_mapping='{
+    "franka":0,
+    "aloha": 0, 
+    "lift2": 0, 
+    "genie1": 0,
+    }' \
+  --policy.robot_action_dim='{
+    "franka":8,
+    "aloha": 14, 
+    "lift2": 14, 
+    "genie1": 16,
+    }' \
+  --policy.robot_num_arms='{
+    "franka":1,
+    "aloha": 2, 
+    "lift2": 2, 
+    "genie1": 2,
+    }' \
+  --batch_size=64 \
+  --num_workers=2 \
+  --steps=1600000 \
+  --save_freq=40000 \
+  --output_dir=./outputs/pretrain/dual-${TIMESTAMP} \
+  --job_name=dual-${TIMESTAMP} \
+  --wandb.enable=true \
+  --wandb.disable_artifact=true \
+  --wandb.mode=offline \
+  --wandb.project=lerobot-pretrain \

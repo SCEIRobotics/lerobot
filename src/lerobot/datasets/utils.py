@@ -106,7 +106,8 @@ def update_chunk_file_indices(chunk_idx: int, file_idx: int, chunks_size: int) -
 
 
 def load_nested_dataset(
-    pq_dir: Path, features: datasets.Features | None = None, episodes: list[int] | None = None
+    pq_dir: Path, features: datasets.Features | None = None, episodes: list[int] | None = None,
+    keep_in_memory: bool = False, load_columns: list[str] | None = None
 ) -> Dataset:
     """Find parquet files in provided directory {pq_dir}/chunk-xxx/file-xxx.parquet
     Convert parquet files to pyarrow memory mapped in a cache folder for efficient RAM usage
@@ -124,7 +125,10 @@ def load_nested_dataset(
     with SuppressProgressBars():
         # We use .from_parquet() memory-mapped loading for efficiency
         filters = pa_ds.field("episode_index").isin(episodes) if episodes is not None else None
-        return Dataset.from_parquet([str(path) for path in paths], filters=filters, features=features)
+        return Dataset.from_parquet([str(path) for path in paths], filters=filters, features=features,
+                                     keep_in_memory=keep_in_memory,
+                                     columns=load_columns
+                                    )
 
 
 def get_parquet_num_frames(parquet_path: str | Path) -> int:
@@ -561,7 +565,7 @@ def get_safe_version(repo_id: str, version: str | packaging.version.Version) -> 
     raise ForwardCompatibilityError(repo_id, min(upper_versions))
 
 
-def get_hf_features_from_features(features: dict) -> datasets.Features:
+def get_hf_features_from_features(features: dict, load_columns: list[str] | None = None) -> datasets.Features:
     """Convert a LeRobot features dictionary to a `datasets.Features` object.
 
     Args:
@@ -575,6 +579,8 @@ def get_hf_features_from_features(features: dict) -> datasets.Features:
     """
     hf_features = {}
     for key, ft in features.items():
+        if load_columns is not None and key not in load_columns:
+            continue
         if ft["dtype"] == "video":
             continue
         elif ft["dtype"] == "image":

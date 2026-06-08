@@ -60,12 +60,13 @@ from lerobot.policies.flower.transformers_flower import (
     FlowBlock, 
     stateless_norm
 )
-
+from lerobot.policies.flower.florence2_model.modeling_florence2 import Florence2ForConditionalGeneration
 
 dtype_map = {
     'bf16': torch.bfloat16,
     'no': torch.float32
 }
+
 
 class FlowerPolicy(PreTrainedPolicy):
     """
@@ -97,8 +98,11 @@ class FlowerPolicy(PreTrainedPolicy):
 
         self.flower = FlowerModel(config)
         self.reset()
-
-        self.resize = torchvision.transforms.Resize((config.resize_h, config.resize_w))
+        
+        if config.resize_h is not None and config.resize_w is not None:
+            self.resize = torchvision.transforms.Resize((config.resize_h, config.resize_w))
+        else:
+            self.resize = None
 
     def get_optim_params(self) -> dict:
         """Get parameter groups for optimizer"""
@@ -153,7 +157,7 @@ class FlowerPolicy(PreTrainedPolicy):
         if self.config.image_features:
             batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original     
             batch = self.preprocess_batch(batch)
-        batch = self.process_padding(batch, self.flower.max_action_dim)
+        batch = self.process_padding(batch, self.flower.max_action_dim, self.flower.max_state_dim)
         
         if len(self._queues[ACTION]) == 0:
             actions = self.predict_action_chunk(batch, noise=noise)
@@ -168,16 +172,17 @@ class FlowerPolicy(PreTrainedPolicy):
             for key in self.config.image_features:
                 if key in batch:
                     image = batch[key] if len(batch[key].shape)==5 else batch[key].unsqueeze(1)
-                    bs, obs, c, h, w = image.shape
-                    image = image.view(bs*obs, c, h, w)
-                    image = self.resize(image)
-                    image = image.view(bs, obs, c, self.config.resize_h, self.config.resize_w)
+                    if self.resize is not None:
+                        bs, obs, c, h, w = image.shape
+                        image = image.view(bs*obs, c, h, w)
+                        image = self.resize(image)
+                        image = image.view(bs, obs, c, self.config.resize_h, self.config.resize_w)
                     images.append(image)
             batch[OBS_IMAGES] = torch.stack(images, dim=-4)  # (bs, obs, cam, c, h, w)
 
         return batch
     
-    def process_padding(self, batch, max_action_dim):
+    def process_padding(self, batch, max_action_dim, max_state_dim):
         if ACTION in batch:
             if len(batch[ACTION].shape) == 2:
                 batch[ACTION] = batch[ACTION].unsqueeze(1)
@@ -197,12 +202,13 @@ class FlowerPolicy(PreTrainedPolicy):
                 )
             if action_pad > 0:
                 batch[f'{ACTION}_mask'][..., -action_pad:] = False
+
         if len(batch[OBS_STATE].shape) == 2:
             batch[OBS_STATE] = batch[OBS_STATE].unsqueeze(1)
         bs, horizon, state_dim = batch[OBS_STATE].shape
-        if state_dim > max_action_dim:
-            raise ValueError(f"The state dimension {state_dim} exceeds the maximum allowed dimension {max_action_dim}")
-        state_pad = max_action_dim - state_dim
+        if state_dim > max_state_dim:
+            raise ValueError(f"The state dimension {state_dim} exceeds the maximum allowed dimension {max_state_dim}")
+        state_pad = max_state_dim - state_dim
         batch[OBS_STATE] = F.pad(
             batch[OBS_STATE], 
             (0, state_pad) + (0, 0) * (batch[OBS_STATE].ndim - 1), 
@@ -210,7 +216,7 @@ class FlowerPolicy(PreTrainedPolicy):
             value=0.0
             )
         batch[f'{OBS_STATE}_mask'] = torch.ones(
-            bs, max_action_dim,
+            bs, max_state_dim,
             device=batch[OBS_STATE].device, dtype=torch.bool
             )
         if state_pad>0:
@@ -222,7 +228,7 @@ class FlowerPolicy(PreTrainedPolicy):
         """Run the batch through the model and compute the loss for training or validation."""
         batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
         batch = self.preprocess_batch(batch)
-        batch = self.process_padding(batch, self.flower.max_action_dim)
+        batch = self.process_padding(batch, self.flower.max_action_dim, self.flower.max_state_dim)
         loss = self.flower.compute_loss(batch)
         # no output_dict so returning None
         return loss, None
@@ -248,7 +254,15 @@ class FlowerModel(nn.Module):
         self.vlm_latent_dim = self.config.hidden_dim
 
         # Setup DiT components
-        self.action_space_index = ActionIndex()
+        self.action_space_index = ActionIndex(
+            action_spaces=config.action_spaces,
+            action_dims=config.action_dims,
+            state_dims=config.state_dims,
+            robot_arm=config.robot_arm,
+            robot_mapping=config.robot_mapping,
+            robot_action_dim=config.robot_action_dim,
+            robot_num_arms=config.robot_num_arms,
+        )
         self._setup_dit_components()
         
         # Load pretrained weights if specified
@@ -256,13 +270,17 @@ class FlowerModel(nn.Module):
             self._load_pretrained_weights(config.pretrained_model_path)
         
         self.max_action_dim = self.action_space_index.get_max_action_dim()
+        self.max_state_dim = self.action_space_index.get_max_state_dim()
 
     # ========= init  ============
     def _setup_vlm(self, vlm_path: str, freeze_vision_tower: bool, freeze_florence: bool, freeze_embeddings_only: bool):
         """Initialize and configure the Florence-2 VLM"""
         print(f"Loading Florence-2 from {vlm_path}")
-        
-        self.vlm = AutoModelForCausalLM.from_pretrained(vlm_path, trust_remote_code=True)
+        if self.config.training_stage == "infer":
+            vlm_config = AutoConfig.from_pretrained(vlm_path, trust_remote_code=True)
+            self.vlm = Florence2ForConditionalGeneration(vlm_config)
+        else:
+            self.vlm = AutoModelForCausalLM.from_pretrained(vlm_path, trust_remote_code=True)
         
         # Handle parameter freezing
         if freeze_florence:
@@ -355,10 +373,11 @@ class FlowerModel(nn.Module):
                     ).to(self.device) 
 
             if self.config.use_proprio:
+                input_state_dim = self.action_space_index.get_state_dim(action_idx)
                 # Add proprio encoder if needed for bimanual nav variant otherwise use zero encoder
                 if self.action_space_index.get_num_arms(action_idx) == 2:
                     self.proprio_encoders[action_name] = Mlp(
-                    input_dim, 
+                    input_state_dim, 
                     self.config.dit_dim, 
                     out_features=self.config.dit_dim, 
                     drop=0.2
@@ -622,13 +641,9 @@ class FlowerModel(nn.Module):
         vtheta, _ = self.dit_forward(zt, t, cond)
         
         # valid_mask
-        valid_mask = torch.zeros_like(trajectory, dtype=torch.bool).to(device)
-        for action_name, action_idx in self.action_space_index.action_spaces.items():
-            mask = (action_type == action_idx)
-            if mask.any():
-                adim = self.action_space_index.get_action_dim(action_idx)
-                valid_mask[mask, :, :adim] = True
-        
+        valid_mask = batch[f'{ACTION}_mask']
+        valid_mask = valid_mask.unsqueeze(1).expand(-1, trajectory.size(1), -1)
+
         # Compute loss on valid dimensions only
         diff = (z1 - trajectory) - vtheta
         valid_diff = torch.where(
@@ -636,8 +651,10 @@ class FlowerModel(nn.Module):
             diff, 
             torch.tensor(0.0, device=diff.device)
             )
-        loss = (valid_diff ** 2)  # l2
-        # loss = torch.abs(valid_diff)  # l1
+        if self.config.use_l2_loss:
+            loss = (valid_diff ** 2) # l2
+        else:
+            loss = torch.abs(valid_diff)  # l1
         # Mask loss wherever the action is padded with copies (edges of the dataset trajectory).
         if self.config.do_mask_loss_for_padding:
             if "action_is_pad" not in batch:
@@ -669,10 +686,8 @@ class FlowerModel(nn.Module):
             )
         
         # Get text embeddings
-        # Get text embeddings once to reuse
-        batch_action_index = batch['action_index'].to(device)
-        text_embeds = self._get_text_embeddings_new(batch['text_input_ids'], device)
-        txt_attention_mask = batch['text_attention_mask'].to(device)
+        constructed_prompts, batch_action_index = self.construct_prompts(batch)
+        text_embeds, txt_attention_mask = self._get_text_embeddings(constructed_prompts, device)
         # Add task prompt and aggregation tokens
         task_prompt = self.prompt_embeds.expand(batch_size, -1, -1)
         
@@ -795,41 +810,78 @@ class FlowerModel(nn.Module):
     
         return prompt_embed.unsqueeze(0).unsqueeze(0)
 
-    def construct_prompts(self, tasks):
-        language_instruction = tasks
+    def construct_prompts(self, dataset_batch):
+        """
+        Constructs prompts for Florence-2's encoder to extract task-relevant visual features.
+        
+        Args:
+            dataset_batch: Dictionary containing task information including language instructions
+            
+        Returns:
+            text_prompts: List of formatted prompts for encoder conditioning
+        """
+    
+        language_instruction = dataset_batch["task"]
+        robot_types = dataset_batch["robot_type"]
+
         text_prompts = []
-        batch_action_index = []
-        for idx, instruction in enumerate(language_instruction):
-            robot_type = self.config.robot_type
+        action_index_list = []
+        for instruction, robot_type in zip(language_instruction, robot_types):
             action_index = self.action_space_index.robot_mapping[robot_type]
-            batch_action_index.append(action_index)
-            instruction = generate_policy_prompt(
-                instruction,
-                robot_name=robot_type,
-                num_arms=self.action_space_index.get_num_arms(action_index),
-                action_space=f"{self.action_space_index.get_action_dim(action_index)}D continuous",
-                prompt_style="minimal",
-                include_meta=True
-                )
-            text_prompts.append(instruction)
-        batch_action_index = torch.tensor(batch_action_index)
+
+            if self.action_space_index.robot_action_dim is None:
+                action_space = f"{self.action_space_index.get_action_dim(action_index)}D continuous"
+            else:
+                action_space = f"{self.action_space_index.robot_action_dim[robot_type]}D continuous"
+            if self.action_space_index.robot_num_arms is None:
+                num_arms = self.action_space_index.get_num_arms(action_index)
+            else:
+                num_arms = self.action_space_index.robot_num_arms[robot_type]
+
+            if self.config.vlm_prompt_style == "default":
+                # Original instruction only
+                text_prompt = generate_policy_prompt(
+                    instruction,
+                    robot_name=robot_type,
+                    num_arms=num_arms,
+                    action_space=action_space,
+                    prompt_style="minimal"
+                    )
+                # print(text_prompt)
+                text_prompts.append(text_prompt)
+                action_index_list.append(action_index)
+              
+            elif self.config.vlm_prompt_style == "feature_focused":
+                # Focus on extracting visual features relevant for manipulation
+                prompt = f"<od>{instruction}</od><grounding>identify objects and spatial relationships for robotic manipulation</grounding>"
+                text_prompts.append(prompt)
+                action_index_list.append(action_index)
+                
+            elif self.config.vlm_prompt_style == "state_oriented":
+                # Focus on extracting state-relevant features
+                prompt = f"<od>{instruction}</od><referring_expression_segmentation>locate objects and regions for manipulation</referring_expression_segmentation>"
+                text_prompts.append(prompt)
+                action_index_list.append(action_index)
+                
+            else:
+                raise ValueError(f"Unknown prompt style: {self.config.vlm_prompt_style}")
+        
+        batch_action_index = torch.tensor(action_index_list)
         return text_prompts, batch_action_index
-    
-    def _get_text_inputs(self, constructed_prompts):
-        text_inputs = self.tokenizer(
-                constructed_prompts,
-                return_tensors="pt",
-                padding="max_length",
-                truncation=True,
-                max_length=77
-            )
-        return text_inputs
-    
-    def _get_text_embeddings_new(self, text_inputs, device):
+
+    def _get_text_embeddings(self, text, device):
         """Get text embeddings to use with VLM"""
-        text_inputs = text_inputs.to(device)
-        text_embeds = self.vlm.get_input_embeddings()(text_inputs)
-        return text_embeds
+        text_inputs = self.tokenizer(
+            text,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=77
+        ).to(device)
+        
+        text_embeds = self.vlm.get_input_embeddings()(text_inputs["input_ids"])
+        text_attention_masks = text_inputs.data["attention_mask"]
+        return text_embeds, text_attention_masks
     
     def encode_proprio(self, proprio: torch.Tensor, action_type: torch.Tensor, output_shape) -> torch.Tensor:
         """
@@ -847,7 +899,7 @@ class FlowerModel(nn.Module):
         for action_name, action_idx in self.action_space_index.action_spaces.items():
             mask = (action_type == action_idx)
             if mask.any():
-                adim = self.action_space_index.get_action_dim(action_idx)
+                adim = self.action_space_index.get_state_dim(action_idx)
                 encoded_proprio[mask] = self.proprio_encoders[action_name](proprio[mask, :adim]).squeeze(1).to(default_dtype)
         return encoded_proprio
     

@@ -23,6 +23,7 @@ from typing import Any
 
 import torch
 from accelerate import Accelerator
+from accelerate.utils.operations import send_to_device
 from termcolor import colored
 from torch.optim import Optimizer
 from tqdm import tqdm
@@ -183,7 +184,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         accelerator: Optional Accelerator instance. If None, one will be created automatically.
     """
     cfg.validate()
-
+    time.sleep(5)  # avoid wandb error
     # Create Accelerator if not provided
     # It will automatically detect if running in distributed mode or single-process mode
     # We set step_scheduler_with_optimizer=False to prevent accelerate from adjusting the lr_scheduler steps based on the num_processes
@@ -399,7 +400,20 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             module_path, callable_name = cfg.dataset.collate_fn.rsplit('.', 1)
             module = importlib.import_module(module_path)
             collate_fn = getattr(module, callable_name)
-            collate_fn = collate_fn(**cfg.dataset.collate_fn_params)
+            collate_fn = collate_fn(cfg)
+        
+        if cfg.dataset.use_shard and not cfg.dataset.streaming:
+            world_size = accelerator.num_processes
+            proc_idx = accelerator.process_index
+            total_samples = len(ds)
+            shard_len = total_samples // world_size
+            start = proc_idx * shard_len
+            end = start + shard_len if proc_idx != world_size -1 else total_samples
+            indices = list(range(start, end))
+            ds = torch.utils.data.Subset(ds, indices)
+            # if is_main_process:
+            #     print(f"For dataset {i}, Shard {proc_idx+1} of {world_size} has {start} to {end} samples")
+
         suggested_num_workers = getattr(ds, "suggested_num_workers", cfg.num_workers)
         dataloader = torch.utils.data.DataLoader(
             ds,
@@ -413,7 +427,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             prefetch_factor=2 if suggested_num_workers > 0 else None,
         )
         dataloaders_raw.append(dataloader)
-        dataset_sizes.append(ds.meta.total_frames)
+        dataset_sizes.append(len(ds))
     
     sample_weights = np.array(raw_weights) * np.array(dataset_sizes)
     sample_weights = sample_weights / np.sum(sample_weights)
@@ -428,15 +442,14 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     
     optimizer = prepare_component(optimizer)
     lr_scheduler = prepare_component(lr_scheduler)
-
-    dataloaders = [accelerator.prepare(dl) for dl in dataloaders_raw]
+    if cfg.dataset.use_shard and not cfg.dataset.streaming:
+        dataloaders = dataloaders_raw
+    else:
+        dataloaders = [accelerator.prepare(dl) for dl in dataloaders_raw]
 
     dl_iters = [cycle(dl) for dl in dataloaders]
     if len(dl_iters) == 1:
         dl_iter = dl_iters[0]
-
-
-
 
     policy.train()
 
@@ -480,6 +493,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         else:
             dataloader_idx = 0
             batch = next(dl_iter)
+        if cfg.dataset.use_shard and not cfg.dataset.streaming:
+            batch = send_to_device(batch, accelerator.device)
         batch = preprocessor[dataloader_idx](batch)
         train_tracker.dataloading_s = time.perf_counter() - start_time
 

@@ -42,7 +42,7 @@ class FlowerConfig(PreTrainedConfig):
 
     # The original implementation doesn't sample frames for the last 7 steps,
     # which avoids excessive padding and leads to improved training results.
-    drop_n_last_frames: int = 0 # horizon - n_action_steps - n_obs_steps + 1
+    # drop_n_last_frames: int = 0 # horizon - n_action_steps - n_obs_steps + 1
 
     # Inference
     num_inference_steps: int | None = 4  # num_sampling_steps=4
@@ -94,9 +94,59 @@ class FlowerConfig(PreTrainedConfig):
     query_seq_len: int = 100
     rope_theta: float = 32.0
 
-    resize_h: int = 224
-    resize_w: int = 224
-    robot_type: str = 'panda'
+    resize_h: int | None = None
+    resize_w: int | None = None
+    use_l2_loss: bool = True
+    gradient_accumulation_steps: int = 2
+
+    action_spaces: dict[str, int] = field(
+        default_factory=lambda: {
+            'joint_single': 0,  # Single arm joint position control (type 0)
+            'eef_delta': 1,    # Single arm end-effector velocity (type 1) 
+            'bimanual_nav': 2, # Bimanual with navigation (type 2),
+            # 'nav': 3,         # Navigation (type 3)
+            'bimanual': 3,
+            }
+        )
+    
+    action_dims: dict[str, int] = field(
+        default_factory=lambda: {
+            'joint_single': 8,  # Single arm joint position control (type 0)
+            'eef_delta': 7,    # Single arm end-effector velocity (type 1) 
+            'bimanual_nav': 16, # Bimanual with navigation (type 2),
+            # 'nav': 2,         # Navigation (type 3)
+            'bimanual': 14,
+            }
+        )
+    
+    state_dims: dict[str, int] = field(
+        default_factory=lambda: {
+            'joint_single': 8,  # Single arm joint position control (type 0)
+            'eef_delta': 7,    # Single arm end-effector velocity (type 1) 
+            'bimanual_nav': 16, # Bimanual with navigation (type 2),
+            # 'nav': 2,         # Navigation (type 3)
+            'bimanual': 14,
+            }
+        )
+    
+    robot_arm: dict[str, int] = field(
+        default_factory=lambda:{
+            'joint_single': 1,  # Single arm joint position control (type 0)
+            'eef_delta': 1,    # Single arm end-effector velocity (type 1) 
+            'bimanual_nav': 2, # Bimanual with navigation (type 2),
+            # 'nav': 2,         # Navigation (type 3)
+            'bimanual': 2,
+            }
+        )
+    
+    robot_mapping: dict[str, int] = field(
+        default_factory=lambda:{
+            'panda': 0,
+        }
+    )
+
+    robot_action_dim: dict[str, int] | None = None
+    robot_num_arms: dict[str, int] | None = None
 
     def __post_init__(self):
         super().__post_init__()
